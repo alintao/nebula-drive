@@ -30,12 +30,21 @@ function getCurrentVersion(): string {
  * 在线更新检查路由
  * 从 GitHub Releases 检查最新版本
  */
+// 缓存：避免频繁请求 GitHub API（1 小时 TTL）
+const updateCache: { data: any; time: number } | null = null;
+const CACHE_TTL = 60 * 60 * 1000; // 1 小时
+
 export async function updateRoutes(app: FastifyInstance) {
   /**
    * 检查是否有新版本
    * GET /api/v1/system/check-update
    */
   app.get('/system/check-update', { preHandler: requirePermission('settings:view') }, async (req, reply) => {
+    // 检查缓存
+    if (updateCache && Date.now() - updateCache.time < CACHE_TTL) {
+      return ok(reply, updateCache.data);
+    }
+    
     try {
       // 从 GitHub API 获取最新 release
       const res = await fetch('https://api.github.com/repos/yihuansan/nebula-drive/releases/latest', {
@@ -69,14 +78,20 @@ export async function updateRoutes(app: FastifyInstance) {
       // 比较版本
       const isUpdateAvailable = compareVersions(currentVersion, latestVersion) < 0;
       
-      return ok(reply, {
+      const result = {
         currentVersion,
         latestVersion,
         isUpdateAvailable,
         releaseNotes: latest.body || '',
         publishedAt: latest.published_at,
         downloadUrl: latest.html_url,
-      });
+      };
+      
+      // 更新缓存
+      updateCache.data = result;
+      updateCache.time = Date.now();
+      
+      return ok(reply, result);
     } catch (e: any) {
       return fail(reply, 500, e.message || '检查更新失败');
     }
