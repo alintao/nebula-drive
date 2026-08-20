@@ -1,0 +1,6 @@
+{
+  "title": "fix: 修复 updateCache null 导致登录报错 + 版本号同步到 0.1.4",
+  "body": "## 修复内容\n\n- 修复 `update.routes.ts` 中 `updateCache` 被声明为 `const null` 后尝试设置 `.data` 属性导致的 `Cannot set properties of null (setting 'data')` 错误\n- `const` -> `let`，允许重新赋值\n- 缓存赋值方式改为整体替换：`updateCache = { data, time }`\n- 服务端 `package.json` 版本号同步到 `0.1.4`\n\n## 问题描述\n\n用户登录后，App.vue 自动调用 `/api/v1/system/check-update` 检查更新，该接口中 `updateCache` 初始化为 `null`，首次请求时对 `null` 设置 `.data` 属性导致前端报错。",
+  "head": "alintao:master",
+  "base": "master"
+}

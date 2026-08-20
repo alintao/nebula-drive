@@ -1,0 +1,7 @@
+{
+  "tag_name": "v0.1.4",
+  "name": "v0.1.4 - 修复登录报错 + 版本同步",
+  "body": "## 更新内容\n\n- 修复 `updateCache` 为 `null` 导致登录后 `Cannot set properties of null (setting 'data')` 报错\n- 缓存赋值方式改为整体替换，避免操作 null 对象\n- 服务端 `package.json` 版本号同步到 `0.1.4`\n\n## 部署说明\n\n```bash\ngit pull origin master\npnpm install\npnpm build:server\npnpm build:web\npnpm start\n```\n\n或使用 Docker:\n```bash\ndocker compose up -d --build\n```",
+  "draft": false,
+  "prerelease": false
+}
