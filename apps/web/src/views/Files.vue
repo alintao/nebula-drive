@@ -237,6 +237,7 @@ const previewDialog = ref(false);
 const previewUrl = ref('');
 const previewLoading = ref(false);
 const previewName = ref('');
+const previewPath = ref('');  // 完整文件路径（用于新窗口打开）
 const previewSize = ref(0);
 const previewKind = ref<'image' | 'video' | 'audio' | 'pdf' | 'code'>('image');
 /* ---------- 图片增强功能（对标百度网盘/夸克/Google Drive） ---------- */
@@ -383,6 +384,7 @@ async function openPreview(row: any) {
   const kind = isVideo(row.name) ? 'video' : isAudio(row.name) ? 'audio' : isPdf(row.name) ? 'pdf' : isImage(row.name) ? 'image' : isCode(row.name) ? 'code' : null;
   if (!kind) return download(row);
   previewName.value = row.name;
+  previewPath.value = row.path;  // 保存完整路径
   previewSize.value = row.size || 0;
   previewKind.value = kind;
   previewDialog.value = true;
@@ -437,14 +439,17 @@ function closePreview() {
     URL.revokeObjectURL(previewUrl.value);
   }
   previewUrl.value = '';
+  previewPath.value = '';
 }
 
 /** 在新窗口打开图片 */
 function openInNewTab() {
   if (previewKind.value !== 'image' || !previewUrl.value) return;
-  // 创建新的 blob URL（因为原来的会被 revoke）
+  // 使用当前预览的完整路径
   const token = localStorage.getItem('nebula_token') || '';
-  const base = `/api/v1/files/preview?storageId=${storageId.value}&path=${encodeURIComponent(previewName.value)}`;
+  // previewPath 存储了完整的文件路径
+  const filePath = previewPath.value || previewName.value;
+  const base = `/api/v1/files/preview?storageId=${storageId.value}&path=${encodeURIComponent(filePath)}`;
   const url = `${base}&token=${encodeURIComponent(token)}`;
   window.open(url, '_blank');
 }
