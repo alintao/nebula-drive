@@ -443,15 +443,23 @@ function closePreview() {
 }
 
 /** 在新窗口打开图片 */
-function openInNewTab() {
-  if (previewKind.value !== 'image' || !previewUrl.value) return;
-  // 使用当前预览的完整路径
+async function openInNewTab() {
+  if (previewKind.value !== 'image') return;
   const token = localStorage.getItem('nebula_token') || '';
-  // previewPath 存储了完整的文件路径
   const filePath = previewPath.value || previewName.value;
   const base = `/api/v1/files/preview?storageId=${storageId.value}&path=${encodeURIComponent(filePath)}`;
-  const url = `${base}&token=${encodeURIComponent(token)}`;
-  window.open(url, '_blank');
+  try {
+    const res = await fetch(base, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error('打开失败');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const win = window.open('', '_blank');
+    if (win) {
+      win.document.write(`<html><head><title>${encodeURIComponent(previewName.value)}</title><style>body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#1a1a1a}img{max-width:100%;max-height:100vh;object-fit:contain;user-select:none}</style></head><body><img src="${url}" alt="${encodeURIComponent(previewName.value)}"/></body></html>`);
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '打开新窗口失败');
+  }
 }
 
 /* ---------- 上传 ---------- */
