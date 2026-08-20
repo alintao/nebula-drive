@@ -171,8 +171,32 @@ export async function fileRoutes(app: FastifyInstance) {
         }
       }
       const stream = await driver.download(p, range);
-      reply.header('Content-Type', 'application/octet-stream');
-      reply.header('Content-Disposition', `inline`);
+      // 根据文件扩展名设置正确的 Content-Type
+      const ext = p.split('.').pop()?.toLowerCase() || '';
+      const MIME_MAP: Record<string, string> = {
+        // 视频
+        mp4: 'video/mp4', mkv: 'video/x-matroska', mov: 'video/quicktime',
+        webm: 'video/webm', avi: 'video/x-msvideo', flv: 'video/x-flv',
+        wmv: 'video/x-ms-wmv', m4v: 'video/x-m4v', ts: 'video/mp2t', '3gp': 'video/3gpp',
+        // 音频
+        mp3: 'audio/mpeg', wav: 'audio/wav', flac: 'audio/flac',
+        ogg: 'audio/ogg', aac: 'audio/aac', m4a: 'audio/x-m4a',
+        // 图片
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+        gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+        svg: 'image/svg+xml', ico: 'image/x-icon',
+        // 文档
+        pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown',
+        html: 'text/html', css: 'text/css', js: 'text/javascript',
+        json: 'application/json', csv: 'text/csv',
+        // 代码
+        ts: 'text/typescript', py: 'text/x-python', java: 'text/x-java',
+        c: 'text/x-c', cpp: 'text/x-c++', h: 'text/x-chdr',
+        sh: 'text/x-shell', go: 'text/x-go', rs: 'text/x-rust', vue: 'text/vue',
+      };
+      const contentType = MIME_MAP[ext] || 'application/octet-stream';
+      reply.header('Content-Type', contentType);
+      reply.header('Content-Disposition', `inline; filename="${encodeURIComponent(p.split('/').pop() || 'file')}"`);
       reply.header('Cache-Control', 'private, max-age=3600');
       reply.header('Accept-Ranges', 'bytes');
       if (range) {

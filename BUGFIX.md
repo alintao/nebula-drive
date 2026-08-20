@@ -247,15 +247,52 @@ Get-Process -Name "node" | Stop-Process -Force
 
 ---
 
+### BUG-008: 视频预览无法播放
+
+**严重程度**: 严重  
+**影响范围**: 视频文件预览  
+**发现日期**: 2026-08-20  
+**修复日期**: 2026-08-20
+
+**问题描述**：
+点击视频文件时，预览对话框打开但视频无法播放，黑屏或显示加载失败。
+
+**根本原因**：
+服务器返回的 `Content-Type` 为 `application/octet-stream`（二进制流），浏览器 `<video>` 元素无法识别视频格式，导致无法播放。
+
+**修复方案**：
+1. 在服务器端根据文件扩展名设置正确的 `Content-Type`：
+   - 视频：`video/mp4`, `video/x-matroska`, `video/webm` 等
+   - 音频：`audio/mpeg`, `audio/wav`, `audio/flac` 等
+   - 图片：`image/jpeg`, `image/png`, `image/gif` 等
+   - PDF：`application/pdf`
+   - 代码：`text/plain`, `text/javascript` 等
+
+2. 添加完整的 MIME 类型映射表（30+ 种文件类型）
+
+3. 设置 `Content-Disposition` 为 `inline` 并包含文件名
+
+**修复文件**：
+- `apps/server/src/routes/files.routes.ts` - 添加 MIME 类型映射
+
+**验证**：
+✅ MP4 视频正常播放  
+✅ MKV 视频正常播放  
+✅ WebM 视频正常播放  
+✅ 音频文件正常播放  
+✅ 视频拖动进度条正常工作（Range 请求）
+
+---
+
 ## 📊 统计
 
 | 严重程度 | 数量 |
 |---|---|
-| 严重 | 1 |
+| 严重 | 2 |
 | 中等 | 4 |
 | 低 | 1 |
 | 功能缺失 | 1 |
-| **总计** | **7** |
+| **总计** | **8** |
 
 ---
 
@@ -264,3 +301,4 @@ Get-Process -Name "node" | Stop-Process -Force
 - 所有 BUG 均已在 2026-08-19 至 2026-08-20 期间修复
 - 修复后均通过功能验证
 - 相关代码已提交至 Git 仓库
+- 每次修复后同步至 GitHub
