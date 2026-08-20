@@ -9,10 +9,14 @@ const storageId = ref<number | null>(null);
 const storages = ref<any[]>([]);
 const mediaType = ref<'video' | 'document'>('video');
 
-const VIDEO_EXTS = ['mp4', 'avi', 'mkv', 'mov', 'flv', 'wmv', 'webm'];
-const DOC_EXTS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'ppt', 'pptx', 'txt', 'md'];
-
 const pageTitle = computed(() => mediaType.value === 'video' ? '视频' : '文档');
+
+// 预览状态
+const previewDialog = ref(false);
+const previewUrl = ref('');
+const previewLoading = ref(false);
+const previewName = ref('');
+const previewKind = ref<'video' | 'pdf' | 'code'>('video');
 
 onMounted(async () => {
   try {
@@ -44,6 +48,71 @@ function switchType(type: 'video' | 'document') {
   load();
 }
 
+/** 打开预览 */
+async function openPreview(row: any) {
+  if (row.isDir) return;
+  const name = row.name.toLowerCase();
+  const isVideo = /\.(mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i.test(name);
+  const isPdf = /\.pdf$/i.test(name);
+  const isCode = /\.(txt|md|csv)$/i.test(name);
+  
+  if (!isVideo && !isPdf && !isCode) {
+    // 其他文档：下载
+    const token = localStorage.getItem('nebula_token') || '';
+    const base = `/api/v1/files/download?storageId=${storageId.value}&path=${encodeURIComponent(row.path)}`;
+    const url = `${base}&token=${encodeURIComponent(token)}`;
+    window.open(url, '_blank');
+    return;
+  }
+  
+  previewName.value = row.name;
+  previewKind.value = isVideo ? 'video' : isPdf ? 'pdf' : 'code';
+  previewDialog.value = true;
+  previewLoading.value = true;
+  previewUrl.value = '';
+  
+  try {
+    const token = localStorage.getItem('nebula_token') || '';
+    const base = `/api/v1/files/preview?storageId=${storageId.value}&path=${encodeURIComponent(row.path)}`;
+    
+    if (previewKind.value === 'video') {
+      // 视频：用 Bearer 头获取 blob
+      const res = await fetch(base, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error('预览加载失败');
+      const blob = await res.blob();
+      previewUrl.value = URL.createObjectURL(blob);
+    } else if (previewKind.value === 'pdf') {
+      // PDF：用 Bearer 头获取 blob
+      const res = await fetch(base, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error('预览加载失败');
+      const blob = await res.blob();
+      previewUrl.value = URL.createObjectURL(blob);
+    } else {
+      // 代码/文本：读取文本
+      const res = await fetch(base, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error('预览加载失败');
+      const text = await res.text();
+      previewUrl.value = 'code-loaded';
+      // 显示文本内容
+      const codeEl = document.querySelector('.preview-code code');
+      if (codeEl) codeEl.textContent = text.length > 50000 ? text.slice(0, 50000) + '\n... (内容过长)' : text;
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '预览加载失败');
+    previewDialog.value = false;
+  } finally {
+    previewLoading.value = false;
+  }
+}
+
+function closePreview() {
+  previewDialog.value = false;
+  if (previewUrl.value && previewUrl.value.startsWith('blob:')) {
+    URL.revokeObjectURL(previewUrl.value);
+  }
+  previewUrl.value = '';
+}
+
 function fmtSize(bytes: number) {
   if (bytes === 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -72,7 +141,7 @@ function fmtTime(ts: string) {
     </div>
 
     <div class="media-grid" v-loading="loading">
-      <div v-for="row in entries" :key="row.path" class="media-item glass-card">
+      <div v-for="row in entries" :key="row.path" class="media-item glass-card" @click="openPreview(row)">
         <el-icon :size="42" :color="mediaType === 'video' ? '#ef4444' : '#2563eb'">
           <VideoPlay v-if="mediaType === 'video'" />
           <Document v-else />
@@ -82,6 +151,35 @@ function fmtTime(ts: string) {
       </div>
       <div v-if="!loading && !entries.length" class="empty">暂无{{ pageTitle }}文件</div>
     </div>
+
+    <!-- 预览对话框 -->
+    <el-dialog
+      v-model="previewDialog"
+      :title="previewName"
+      :width="previewKind === 'video' ? '880px' : '720px'"
+      class="preview-dialog"
+      @close="closePreview"
+    >
+      <div class="preview-wrap" v-loading="previewLoading">
+        <video
+          v-if="previewKind === 'video' && previewUrl"
+          :src="previewUrl"
+          class="preview-media"
+          controls
+          autoplay
+        ></video>
+        <iframe
+          v-else-if="previewKind === 'pdf' && previewUrl"
+          :src="previewUrl"
+          class="preview-pdf"
+          width="100%"
+          height="65vh"
+        ></iframe>
+        <pre v-else-if="previewKind === 'code' && previewUrl" class="preview-code">
+          <code>{{ previewName }}</code>
+        </pre>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -110,8 +208,12 @@ function fmtTime(ts: string) {
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  transition: all 0.2s;
 }
-.media-item:hover { transform: translateY(-2px); }
+.media-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
 .media-name {
   font-size: 14px;
   font-weight: 500;
@@ -122,4 +224,31 @@ function fmtTime(ts: string) {
 }
 .media-meta { font-size: 12px; color: var(--text-secondary); }
 .empty { grid-column: 1 / -1; text-align: center; padding: 60px; color: var(--text-secondary); }
+
+/* 预览样式 */
+.preview-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 200px;
+}
+.preview-media {
+  width: 100%;
+  max-height: 65vh;
+  border-radius: 12px;
+  background: #000;
+}
+.preview-pdf {
+  border-radius: 12px;
+}
+.preview-code {
+  width: 100%;
+  max-height: 65vh;
+  overflow: auto;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
 </style>
