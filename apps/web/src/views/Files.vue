@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api, fmtSize, fmtTime } from '../api';
+import { useTheme, THEMES, type ThemeKey } from '../useTheme';
 
 const storages = ref<any[]>([]);
 const storageId = ref(0);
@@ -11,6 +12,223 @@ const loading = ref(false);
 const selected = ref<any[]>([]);
 const tableRef = ref();
 const view = ref<'grid' | 'list' | 'photo'>('grid');
+const multiSelectMode = ref(false);
+
+// 布局类型（根据主题决定）
+const { theme } = useTheme();
+const layoutType = computed(() => {
+  const t = THEMES[theme.value as ThemeKey];
+  return t?.layout || 'sidebar';
+});
+
+// 统计卡片配置
+const statCards = computed(() => [
+  { id: 'folders', icon: 'Folder', iconClass: 'si-blue', label: '文件夹', value: entries.value.filter(e => e.isDir).length },
+  { id: 'files', icon: 'Document', iconClass: 'si-green', label: '文件', value: entries.value.filter(e => !e.isDir).length },
+  { id: 'size', icon: 'DataLine', iconClass: 'si-purple', label: '总大小', value: fmtSize(entries.value.reduce((sum, e) => sum + (e.size || 0), 0)) },
+]);
+
+/* ---------- 标签系统 ---------- */
+const allTags = ref<string[]>([]);
+const activeTagFilter = ref<string | null>(null);
+const tagFilterDialog = ref(false);
+const tagDialogVisible = ref(false);
+const tagDialogTarget = ref<any>(null);
+const tagDialogTags = ref<string[]>([]);
+const newTagInput = ref('');
+
+async function loadAllTags() {
+  try {
+    const r = await api('/tags');
+    allTags.value = r.tags || [];
+  } catch { /* ignore */ }
+}
+
+async function loadFileTags(filePath: string): Promise<string[]> {
+  try {
+    const r = await api(`/files/${encodeURIComponent(filePath)}/tags?storageId=${storageId.value}`);
+    return r.tags || [];
+  } catch { return []; }
+}
+
+async function openTagDialog(row: any) {
+  tagDialogTarget.value = row;
+  tagDialogTags.value = await loadFileTags(row.path);
+  tagDialogVisible.value = true;
+}
+
+async function addTagToCurrent() {
+  const tag = newTagInput.value.trim();
+  if (!tag || !tagDialogTarget.value) return;
+  try {
+    await api(`/files/${encodeURIComponent(tagDialogTarget.value.path)}/tags?storageId=${storageId.value}`, {
+      method: 'POST',
+      body: JSON.stringify({ tag }),
+    });
+    tagDialogTags.value.push(tag);
+    newTagInput.value = '';
+    loadAllTags();
+  } catch (e: any) {
+    ElMessage.error(e.message || '添加标签失败');
+  }
+}
+
+async function removeTagFromCurrent(tag: string) {
+  if (!tagDialogTarget.value) return;
+  try {
+    await api(`/files/${encodeURIComponent(tagDialogTarget.value.path)}/tags/${encodeURIComponent(tag)}?storageId=${storageId.value}`, {
+      method: 'DELETE',
+    });
+    tagDialogTags.value = tagDialogTags.value.filter(t => t !== tag);
+    loadAllTags();
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除标签失败');
+  }
+}
+
+async function createNewTag() {
+  const tag = newTagInput.value.trim();
+  if (!tag) return;
+  try {
+    await api('/tags', { method: 'POST', body: JSON.stringify({ tag }) });
+    allTags.value.push(tag);
+    newTagInput.value = '';
+  } catch (e: any) {
+    ElMessage.error(e.message || '创建标签失败');
+  }
+}
+
+async function deleteTag(tag: string) {
+  try {
+    await api(`/tags/${encodeURIComponent(tag)}`, { method: 'DELETE' });
+    allTags.value = allTags.value.filter(t => t !== tag);
+    if (activeTagFilter.value === tag) activeTagFilter.value = null;
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除标签失败');
+  }
+}
+
+function filterByTag(tag: string) {
+  if (activeTagFilter.value === tag) {
+    activeTagFilter.value = null;
+    load();
+  } else {
+    activeTagFilter.value = tag;
+    load();
+  }
+}
+
+async function loadTagFiles() {
+  if (!activeTagFilter.value) return;
+  loading.value = true;
+  try {
+    const r = await api(`/files-by-tag?tag=${encodeURIComponent(activeTagFilter.value)}`);
+    entries.value = r.files.map((f: any) => ({
+      name: f.path.split('/').pop(),
+      path: f.path,
+      isDir: false,
+      size: 0,
+      mtime: 0,
+      tag: f.tag,
+    }));
+  } catch (e: any) {
+    ElMessage.error(e.message || '加载失败');
+  } finally {
+    loading.value = false;
+  }
+}
+
+/* ---------- 右键上下文菜单 ---------- */
+const contextMenu = ref({ visible: false, x: 0, y: 0, target: null as any });
+function showContextMenu(e: MouseEvent, row: any) {
+  e.preventDefault();
+  e.stopPropagation();
+  contextMenu.value = { visible: true, x: e.clientX, y: e.clientY, target: row };
+}
+function closeContextMenu() {
+  contextMenu.value.visible = false;
+}
+function ctxAction(cmd: string) {
+  const row = contextMenu.value.target;
+  closeContextMenu();
+  if (!row) return;
+  switch (cmd) {
+    case 'open': openDir(row); break;
+    case 'preview': openPreview(row); break;
+    case 'download': download(row); break;
+    case 'decompress': doDecompress(row); break;
+    case 'compress': doCompressSingle(row); break;
+    case 'share': openShare(row); break;
+    case 'rename': openRename(row); break;
+    case 'move': openMove(row, 'move'); break;
+    case 'copy': openMove(row, 'copy'); break;
+    case 'props': openProps(row); break;
+    case 'delete': doDelete(row); break;
+  }
+}
+/** 压缩单个文件/文件夹 */
+async function doCompressSingle(row: any) {
+  compressing.value = true;
+  try {
+    const r = await api('/files/compress', {
+      method: 'POST',
+      body: JSON.stringify({
+        storageId: storageId.value,
+        paths: [row.path],
+        destPath: path.value,
+      }),
+    });
+    ElMessage.success(`已压缩为 ${r.name}`);
+    load();
+  } catch (e: any) {
+    ElMessage.error(e.message || '压缩失败');
+  } finally {
+    compressing.value = false;
+  }
+}
+// 点击其他位置关闭菜单
+onMounted(() => {
+  document.addEventListener('click', closeContextMenu);
+  document.addEventListener('contextmenu', (e) => {
+    // 如果点击的不是文件卡片，关闭菜单
+    if (!(e.target as HTMLElement).closest?.('.file-card, .el-table__row')) {
+      closeContextMenu();
+    }
+  });
+});
+onUnmounted(() => {
+  document.removeEventListener('click', closeContextMenu);
+});
+
+/** 判断文件是否被选中 */
+function isSelected(row: any) {
+  return selected.value.some((x: any) => x.path === row.path);
+}
+
+/** 切换文件选中状态 */
+function toggleSelect(row: any) {
+  const idx = selected.value.findIndex((x: any) => x.path === row.path);
+  if (idx >= 0) {
+    selected.value.splice(idx, 1);
+  } else {
+    selected.value.push(row);
+  }
+}
+
+/** 清空选中并退出多选模式 */
+function clearSelection() {
+  selected.value = [];
+  multiSelectMode.value = false;
+}
+
+/** 卡片点击：多选模式下选中，否则正常打开 */
+function onCardClick(row: any) {
+  if (multiSelectMode.value) {
+    toggleSelect(row);
+  } else {
+    openDir(row);
+  }
+}
 
 /* ---------- 文件类型图标（按扩展名着色，对标百度网盘） ---------- */
 const FILE_TYPES: { exts: string[]; icon: string; color: string }[] = [
@@ -65,6 +283,11 @@ async function loadStorages() {
 
 async function load() {
   if (!storageId.value) return;
+  // 如果正在按标签筛选，加载标签文件
+  if (activeTagFilter.value) {
+    await loadTagFiles();
+    return;
+  }
   loading.value = true;
   try {
     const r = await api(
@@ -157,11 +380,69 @@ const moveDialog = ref(false);
 const moveTarget = ref<any>(null);
 const moveMode = ref<'move' | 'copy'>('move');
 const moveDest = ref('/');
+
+/* 目录选择器状态 */
+const dirPickerLoading = ref(false);
+const dirPickerEntries = ref<any[]>([]);
+const dirPickerCrumbs = computed(() => {
+  const out = [{ name: '根目录', path: '/' }];
+  if (moveDest.value !== '/') {
+    const segs = moveDest.value.split('/').filter(Boolean);
+    let acc = '';
+    for (const s of segs) {
+      acc += '/' + s;
+      out.push({ name: s, path: acc });
+    }
+  }
+  return out;
+});
+async function loadDirPicker(dirPath?: string) {
+  const p = dirPath || moveDest.value;
+  dirPickerLoading.value = true;
+  try {
+    const r = await api(`/files?storageId=${storageId.value}&path=${encodeURIComponent(p)}&sort=name&order=asc`);
+    dirPickerEntries.value = r.entries.filter((e: any) => e.isDir);
+  } catch (e: any) {
+    ElMessage.error(e.message || '加载目录失败');
+  } finally {
+    dirPickerLoading.value = false;
+  }
+}
+function dirPickerEnter(dirPath: string) {
+  moveDest.value = dirPath;
+  loadDirPicker(dirPath);
+}
+function dirPickerGoTo(idx: number) {
+  const crumb = dirPickerCrumbs.value[idx];
+  if (crumb) {
+    moveDest.value = crumb.path;
+    loadDirPicker(crumb.path);
+  }
+}
+async function dirPickerNewFolder() {
+  try {
+    const { value } = await ElMessageBox.prompt('输入新文件夹名称', '新建文件夹', {
+      confirmButtonText: '创建',
+      cancelButtonText: '取消',
+    });
+    const name = (value || '').trim();
+    if (!name) return;
+    const parentPath = moveDest.value === '/' ? '' : moveDest.value;
+    const newPath = parentPath + '/' + name;
+    await api('/files/mkdir', { method: 'POST', body: JSON.stringify({ storageId: storageId.value, path: newPath }) });
+    ElMessage.success('已创建');
+    loadDirPicker();
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e.message || '创建失败');
+  }
+}
+
 function openMove(row: any, mode: 'move' | 'copy') {
   moveTarget.value = row;
   moveMode.value = mode;
   moveDest.value = parent.value || '/';
   moveDialog.value = true;
+  loadDirPicker(moveDest.value);
 }
 async function doMove() {
   const dest = moveDest.value.trim() || '/';
@@ -582,19 +863,68 @@ async function chunkUpload(f: File, u: any) {
   u.percent = 100;
 }
 
+/* ---------- 压缩（保存到服务器）---------- */
+const compressing = ref(false);
+async function doCompress() {
+  if (!selected.value.length) return ElMessage.warning('请先选择文件或文件夹');
+  compressing.value = true;
+  try {
+    const r = await api('/files/compress', {
+      method: 'POST',
+      body: JSON.stringify({
+        storageId: storageId.value,
+        paths: selected.value.map((x: any) => x.path),
+        destPath: path.value,
+      }),
+    });
+    ElMessage.success(`已压缩为 ${r.name}`);
+    clearSelection();
+    load();
+  } catch (e: any) {
+    ElMessage.error(e.message || '压缩失败');
+  } finally {
+    compressing.value = false;
+  }
+}
+
+/* ---------- 解压 zip ---------- */
+const decompressing = ref(false);
+async function doDecompress(row: any) {
+  if (!row.name.toLowerCase().endsWith('.zip')) return;
+  try {
+    await ElMessageBox.confirm(`确定解压「${row.name}」吗？`, '解压确认', { type: 'info' });
+  } catch { return; }
+  decompressing.value = true;
+  try {
+    const destDir = row.path.replace(/\/[^/]*$/, '') || '/';
+    await api('/files/decompress', {
+      method: 'POST',
+      body: JSON.stringify({
+        storageId: storageId.value,
+        path: row.path,
+        destPath: destDir,
+      }),
+    });
+    ElMessage.success('解压完成');
+    load();
+  } catch (e: any) {
+    ElMessage.error(e.message || '解压失败');
+  } finally {
+    decompressing.value = false;
+  }
+}
+
 /* ---------- 批量下载（zip）---------- */
 const batchDownloading = ref(false);
 async function doBatchDownload() {
-  if (!selected.value.length) return ElMessage.warning('请先选择文件');
-  const fileRows = selected.value.filter((x: any) => !x.isDir);
-  if (!fileRows.length) return ElMessage.warning('请选择文件（文件夹不支持打包）');
+  if (!selected.value.length) return ElMessage.warning('请先选择文件或文件夹');
   batchDownloading.value = true;
   try {
     const token = localStorage.getItem('nebula_token') || '';
     const res = await fetch('/api/v1/files/batch-download', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storageId: storageId.value, paths: fileRows.map((x: any) => x.path) }),
+      body: JSON.stringify({ storageId: storageId.value, paths: selected.value.map((x: any) => x.path) }),
     });
     if (!res.ok) throw new Error('打包失败');
     const blob = await res.blob();
@@ -720,17 +1050,39 @@ const photoEntries = computed(() =>
   })
 );
 function photoUrl(row: any) {
-  return `/api/v1/files/${encodeURIComponent(row.path)}?storageId=${storageId.value}&t=thumb`;
+  return `/api/v1/files/preview?storageId=${storageId.value}&path=${encodeURIComponent(row.path)}`;
 }
 
 onMounted(async () => {
   await loadStorages();
+  await loadAllTags();
   if (storageId.value) load();
 });
 </script>
 
 <template>
-  <div class="files-page">
+  <div class="files-page" :class="{
+    'files-dashboard': layoutType === 'dashboard',
+    'files-bento': layoutType === 'bento',
+    'files-command': layoutType === 'command',
+    'files-topnav': layoutType === 'topnav'
+  }">
+    <!-- 仪表盘统计卡片 -->
+    <div v-if="layoutType === 'dashboard'" class="stats-bar">
+      <div
+        v-for="card in statCards"
+        :key="card.id"
+        class="stat-card glass"
+      >
+        <div class="stat-icon" :class="card.iconClass">
+          <el-icon><component :is="card.icon" /></el-icon>
+        </div>
+        <div class="stat-info">
+          <div class="stat-value">{{ card.value }}</div>
+          <div class="stat-label">{{ card.label }}</div>
+        </div>
+      </div>
+    </div>
     <div class="files-glass glass">
       <div class="toolbar">
         <el-select v-model="storageId" size="default" class="storage-select" @change="onStorageChange">
@@ -751,6 +1103,11 @@ onMounted(async () => {
         <button class="sort-order-btn glass-btn" :title="sortOrder === 'asc' ? '当前升序，点击切换降序' : '当前降序，点击切换升序'" @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'; load()">
           <el-icon><ArrowUp v-if="sortOrder === 'asc'" /><ArrowDown v-else /></el-icon>
         </button>
+        <!-- 标签筛选 -->
+        <el-select v-if="activeTagFilter" v-model="activeTagFilter" size="small" class="tag-select" clearable placeholder="按标签筛选" @change="load">
+          <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
+        </el-select>
+        <el-button v-if="!activeTagFilter" size="small" @click="tagFilterDialog = true"><el-icon><PriceTag /></el-icon>&nbsp;标签筛选</el-button>
         <!-- 视图切换：网格 / 列表 / 照片 -->
         <div class="view-toggle glass-btn">
           <button class="vt-btn" :class="{ active: view === 'grid' }" title="网格视图" @click="view = 'grid'">
@@ -767,12 +1124,29 @@ onMounted(async () => {
         <el-button size="small" @click="searchDialog = true"><el-icon><Search /></el-icon>&nbsp;搜索</el-button>
         <el-button size="small" @click="mkdirDialog = true; mkdirName = ''"><el-icon><FolderAdd /></el-icon>&nbsp;新建文件夹</el-button>
         <el-button size="small" type="primary" @click="pickFiles"><el-icon><Upload /></el-icon>&nbsp;上传文件</el-button>
-        <el-button size="small" type="danger" :disabled="!selected.length" @click="doBatchDelete">
+        <el-button
+          size="small"
+          :type="multiSelectMode ? 'warning' : 'default'"
+          @click="multiSelectMode = !multiSelectMode; if (!multiSelectMode) selected = []"
+        >
+          <el-icon><Check /></el-icon>&nbsp;{{ multiSelectMode ? '退出多选' : '多选模式' }}
+        </el-button>
+        <el-button v-if="multiSelectMode" size="small" type="danger" :disabled="!selected.length" @click="doBatchDelete">
           <el-icon><Delete /></el-icon>&nbsp;删除选中
         </el-button>
-        <el-button size="small" type="success" :disabled="!selected.length" :loading="batchDownloading" @click="doBatchDownload">
+        <el-button v-if="multiSelectMode" size="small" type="success" :disabled="!selected.length" :loading="batchDownloading" @click="doBatchDownload">
           <el-icon><Download /></el-icon>&nbsp;批量下载
         </el-button>
+        <el-button v-if="multiSelectMode" size="small" type="warning" :disabled="!selected.length" :loading="compressing" @click="doCompress">
+          <el-icon><Box /></el-icon>&nbsp;压缩
+        </el-button>
+
+      </div>
+
+      <!-- 选中信息栏（仅多选模式） -->
+      <div v-if="multiSelectMode && selected.length" class="selection-bar">
+        <span>已选择 <b>{{ selected.length }}</b> 项</span>
+        <el-button link size="small" @click="clearSelection">取消选择</el-button>
       </div>
 
       <!-- 网格视图（毛玻璃卡片 + 悬浮微动画） -->
@@ -781,8 +1155,17 @@ onMounted(async () => {
           v-for="row in entries"
           :key="row.path"
           class="file-card glass-card"
-          @click="openDir(row)"
+          :class="{ selected: isSelected(row) }"
+          @click="onCardClick(row)"
+          @contextmenu="showContextMenu($event, row)"
         >
+          <!-- 选择框：仅多选模式显示 -->
+          <div v-if="multiSelectMode" class="fc-checkbox" @click.stop>
+            <el-checkbox
+              :model-value="isSelected(row)"
+              @change="toggleSelect(row)"
+            />
+          </div>
           <div class="fc-icon">
             <el-icon :size="42" :color="fileType(row.name, row.isDir).color">
               <component :is="fileType(row.name, row.isDir).icon" />
@@ -814,6 +1197,9 @@ onMounted(async () => {
               <el-tooltip v-if="isArchive(row.name)" content="压缩包内容" placement="top" :show-after="300">
                 <el-button link @click="openArchivePreview(row)"><el-icon><Files /></el-icon></el-button>
               </el-tooltip>
+              <el-tooltip v-if="row.name.toLowerCase().endsWith('.zip')" content="解压到当前目录" placement="top" :show-after="300">
+                <el-button link @click="doDecompress(row)"><el-icon><Box /></el-icon></el-button>
+              </el-tooltip>
               <el-tooltip content="删除" placement="top" :show-after="300">
                 <el-button link type="danger" @click="doDelete(row)"><el-icon><Delete /></el-icon></el-button>
               </el-tooltip>
@@ -835,16 +1221,16 @@ onMounted(async () => {
 
       <!-- 列表视图 -->
       <el-table
-        v-else
+        v-if="view === 'list'"
         ref="tableRef"
         v-loading="loading"
         class="file-table"
         :data="entries"
         row-key="path"
         @selection-change="(v: any[]) => (selected = v)"
-        @row-click="(r: any) => openDir(r.row)"
+        @row-contextmenu="(row: any, col: any, event: MouseEvent) => showContextMenu(event, row.row)"
       >
-        <el-table-column type="selection" width="40" />
+        <el-table-column v-if="multiSelectMode" type="selection" width="40" />
         <el-table-column label="名称" min-width="300">
           <template #default="{ row }">
             <el-icon class="f-icon" :color="fileType(row.name, row.isDir).color">
@@ -873,6 +1259,7 @@ onMounted(async () => {
             <div v-else class="row-actions">
               <el-button v-if="isPreviewable(row.name)" link type="primary" size="small" @click.stop="openPreview(row)">预览</el-button>
               <el-button link type="primary" size="small" @click.stop="download(row)">下载</el-button>
+              <el-button v-if="row.name.toLowerCase().endsWith('.zip')" link type="warning" size="small" @click.stop="doDecompress(row)">解压</el-button>
               <el-button link type="danger" size="small" @click.stop="doDelete(row)">删除</el-button>
               <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCmd(cmd, row)">
                 <el-button link size="small" class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
@@ -891,7 +1278,7 @@ onMounted(async () => {
         </el-table-column>
       </el-table>
 
-      <!-- 照片视图（仅显示图片文件） -->
+      <!-- 照片视图（纯图片画廊） -->
       <div v-if="view === 'photo'" v-loading="loading" class="photo-grid">
         <div
           v-for="row in photoEntries"
@@ -900,7 +1287,7 @@ onMounted(async () => {
           @click="openPreview(row)"
         >
           <img :src="photoUrl(row)" :alt="row.name" loading="lazy" />
-          <div class="photo-name">{{ row.name }}</div>
+          <div class="photo-overlay">{{ row.name }}</div>
         </div>
         <div v-if="!loading && !photoEntries.length" class="empty">此文件夹没有图片文件</div>
       </div>
@@ -924,13 +1311,56 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- 移动 / 复制 -->
-    <el-dialog v-model="moveDialog" :title="moveMode === 'move' ? '移动到' : '复制到'" width="460px">
-      <div class="form-tip">目标目录（相对存储根目录，以 / 开头）</div>
-      <el-input v-model="moveDest" placeholder="/docs/" />
+    <!-- 移动 / 复制：目录选择器 -->
+    <el-dialog v-model="moveDialog" :title="moveMode === 'move' ? '移动到' : '复制到'" width="520px">
+      <div class="dir-picker">
+        <!-- 面包屑 -->
+        <div class="dir-picker-breadcrumb">
+          <el-breadcrumb separator="/">
+            <el-breadcrumb-item
+              v-for="(crumb, idx) in dirPickerCrumbs"
+              :key="crumb.path"
+              :href="''"
+              @click.native="dirPickerGoTo(idx)"
+            >
+              {{ crumb.name }}
+            </el-breadcrumb-item>
+          </el-breadcrumb>
+        </div>
+        <!-- 文件夹列表 -->
+        <div class="dir-picker-list" v-loading="dirPickerLoading">
+          <div
+            v-for="d in dirPickerEntries"
+            :key="d.path"
+            class="dir-picker-item"
+            @click="dirPickerEnter(d.path)"
+          >
+            <el-icon class="dir-icon"><Folder /></el-icon>
+            <span class="dir-name">{{ d.name }}</span>
+            <span class="dir-hint">进入</span>
+          </div>
+          <div v-if="!dirPickerLoading && !dirPickerEntries.length" class="dir-picker-empty">
+            此目录没有子文件夹
+          </div>
+        </div>
+        <!-- 当前目录信息 + 操作 -->
+        <div class="dir-picker-footer">
+          <div class="dir-picker-current">
+            <span>当前目录：</span>
+            <code>{{ moveDest }}</code>
+          </div>
+          <div class="dir-picker-actions">
+            <el-button size="small" @click="dirPickerNewFolder">
+              <el-icon><FolderAdd /></el-icon> 新建文件夹
+            </el-button>
+            <el-button size="small" type="primary" @click="doMove">
+              选择此目录
+            </el-button>
+          </div>
+        </div>
+      </div>
       <template #footer>
         <el-button @click="moveDialog = false">取消</el-button>
-        <el-button type="primary" @click="doMove">确定</el-button>
       </template>
     </el-dialog>
 
@@ -1171,15 +1601,284 @@ onMounted(async () => {
       </div>
     </el-dialog>
 
+    <!-- 标签筛选对话框 -->
+    <el-dialog v-model="tagFilterDialog" title="按标签筛选" width="480px">
+      <div class="tag-filter-list">
+        <div v-if="allTags.length === 0" class="empty">暂无标签</div>
+        <div v-for="t in allTags" :key="t" class="tag-filter-item" @click="activeTagFilter = t; tagFilterDialog = false; load()">
+          <el-icon><PriceTag /></el-icon>&nbsp;{{ t }}
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="tagFilterDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 文件标签管理对话框 -->
+    <el-dialog v-model="tagDialogVisible" :title="`标签：${tagDialogTarget?.name || ''}`" width="480px">
+      <div class="tag-manage-list">
+        <div v-if="tagDialogTags.length === 0" class="empty">该文件暂无标签</div>
+        <div v-for="tag in tagDialogTags" :key="tag" class="tag-manage-item">
+          <span class="tag-badge">{{ tag }}</span>
+          <el-button link size="small" @click="removeTagFromCurrent(tag)"><el-icon><Close /></el-icon></el-button>
+        </div>
+      </div>
+      <div class="tag-input-row">
+        <el-input v-model="newTagInput" placeholder="输入新标签名称" size="small" @keyup.enter="addTagToCurrent" />
+        <el-button type="primary" size="small" @click="addTagToCurrent">添加</el-button>
+      </div>
+      <div class="tag-existing">
+        <span class="tag-existing-label">已有标签：</span>
+        <el-tag v-for="t in allTags" :key="t" size="small" @click="newTagInput = t" style="cursor: pointer; margin-right: 6px;">{{ t }}</el-tag>
+      </div>
+    </el-dialog>
+
     <input ref="fileInput" type="file" multiple class="file-picker" @change="onPick" />
+
+    <!-- 右键上下文菜单 -->
+    <div
+      v-if="contextMenu.visible"
+      class="ctx-menu glass"
+      :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+      @click="closeContextMenu"
+    >
+      <template v-if="contextMenu.target?.isDir">
+        <!-- 文件夹菜单 -->
+        <button class="ctx-item" @click.stop="ctxAction('open')">
+          <el-icon><Folder /></el-icon> 打开
+        </button>
+        <div class="ctx-sep" />
+        <button class="ctx-item" @click.stop="ctxAction('share')">
+          <el-icon><Share /></el-icon> 分享
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('compress')">
+          <el-icon><Box /></el-icon> 压缩
+        </button>
+        <div class="ctx-sep" />
+        <button class="ctx-item" @click.stop="ctxAction('rename')">
+          <el-icon><EditPen /></el-icon> 重命名
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('move')">
+          <el-icon><Right /></el-icon> 移动
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('copy')">
+          <el-icon><Copy /></el-icon> 复制
+        </button>
+        <div class="ctx-sep" />
+        <button class="ctx-item ctx-danger" @click.stop="ctxAction('delete')">
+          <el-icon><Delete /></el-icon> 删除
+        </button>
+      </template>
+      <template v-else>
+        <!-- 文件菜单 -->
+        <button v-if="isPreviewable(contextMenu.target?.name)" class="ctx-item" @click.stop="ctxAction('preview')">
+          <el-icon><View /></el-icon> 预览
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('download')">
+          <el-icon><Download /></el-icon> 下载
+        </button>
+        <button v-if="contextMenu.target?.name?.toLowerCase()?.endsWith('.zip')" class="ctx-item" @click.stop="ctxAction('decompress')">
+          <el-icon><Box /></el-icon> 解压
+        </button>
+        <button v-if="!isArchive(contextMenu.target?.name)" class="ctx-item" @click.stop="ctxAction('compress')">
+          <el-icon><Box /></el-icon> 压缩
+        </button>
+        <div class="ctx-sep" />
+        <button class="ctx-item" @click.stop="ctxAction('share')">
+          <el-icon><Share /></el-icon> 分享
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('rename')">
+          <el-icon><EditPen /></el-icon> 重命名
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('move')">
+          <el-icon><Right /></el-icon> 移动
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('copy')">
+          <el-icon><Copy /></el-icon> 复制
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('props')">
+          <el-icon><InfoFilled /></el-icon> 属性
+        </button>
+        <button class="ctx-item" @click.stop="openTagDialog(contextMenu.target)">
+          <el-icon><PriceTag /></el-icon> 标签
+        </button>
+        <div class="ctx-sep" />
+        <button class="ctx-item ctx-danger" @click.stop="ctxAction('delete')">
+          <el-icon><Delete /></el-icon> 删除
+        </button>
+      </template>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* 仪表盘统计卡片 */
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 14px;
+}
+.stat-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  color: #fff;
+  flex-shrink: 0;
+}
+.si-blue { background: linear-gradient(135deg, #5b8cff, #7c6ff0); }
+.si-green { background: linear-gradient(135deg, #2ea24f, #6fcf9a); }
+.si-purple { background: linear-gradient(135deg, #7c6ff0, #b8a4f5); }
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stat-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* 目录选择器 */
+.dir-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dir-picker-breadcrumb {
+  padding: 8px 0;
+}
+.dir-picker-list {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 8px;
+}
+.dir-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.dir-picker-item:hover {
+  background: var(--accent-soft);
+}
+.dir-icon {
+  color: var(--accent);
+  font-size: 20px;
+}
+.dir-name {
+  flex: 1;
+  font-size: 14px;
+}
+.dir-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.dir-picker-item:hover .dir-hint {
+  opacity: 1;
+}
+.dir-picker-empty {
+  text-align: center;
+  padding: 24px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.dir-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dir-picker-current {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.dir-picker-current code {
+  background: var(--glass-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.dir-picker-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* 右键上下文菜单 */
+.ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 160px;
+  padding: 6px 0;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.ctx-item:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ctx-item .el-icon {
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+.ctx-item:hover .el-icon {
+  color: var(--accent);
+}
+.ctx-danger {
+  color: #ef4444;
+}
+.ctx-danger .el-icon {
+  color: #ef4444;
+}
+.ctx-danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+.ctx-sep {
+  height: 1px;
+  background: var(--glass-border);
+  margin: 4px 8px;
+}
+
 .files-glass {
   border-radius: 20px;
   padding: 18px;
   min-height: calc(100vh - 100px);
+  position: relative;
+  z-index: 1;
 }
 .toolbar {
   display: flex;
@@ -1386,6 +2085,22 @@ onMounted(async () => {
   padding-top: 8px;
 }
 
+/* 选中信息栏 */
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  margin-bottom: 12px;
+  background: var(--accent-soft);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.selection-bar b {
+  color: var(--accent);
+}
+
 /* 网格视图 */
 .file-grid {
   display: grid;
@@ -1401,6 +2116,25 @@ onMounted(async () => {
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  position: relative;
+  transition: all 0.2s;
+}
+.file-card.selected {
+  border: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+.file-card.selected .fc-name {
+  color: var(--accent);
+}
+/* 选择框：左上角，始终可见 */
+.fc-checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+}
+.fc-checkbox .el-checkbox {
+  vertical-align: middle;
 }
 .fc-icon {
   height: 56px;
@@ -1613,43 +2347,185 @@ onMounted(async () => {
   margin-bottom: 12px;
 }
 
-/* 照片视图 */
+/* 照片视图 - 纯图片画廊 */
 .photo-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
   padding: 8px 0;
 }
 .photo-card {
   position: relative;
-  border-radius: 14px;
+  border-radius: 12px;
   overflow: hidden;
   cursor: pointer;
-  background: var(--accent-soft);
-  box-shadow: var(--shadow);
+  background: #000;
   transition: transform 0.2s, box-shadow 0.2s;
 }
 .photo-card:hover {
-  transform: translateY(-4px);
+  transform: scale(1.02);
   box-shadow: var(--shadow-hover);
 }
 .photo-card img {
   width: 100%;
-  height: 160px;
+  height: 220px;
   object-fit: cover;
   display: block;
 }
-.photo-name {
+.photo-overlay {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 6px 10px;
+  padding: 8px 12px;
   font-size: 12px;
   color: #fff;
-  background: linear-gradient(transparent, rgba(0,0,0,0.6));
+  background: linear-gradient(transparent, rgba(0,0,0,0.7));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.photo-card:hover .photo-overlay {
+  opacity: 1;
+}
+
+/* ---------- 便当盒布局：混合大小卡片 ---------- */
+.files-bento .file-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+}
+.files-bento .file-card {
+  border-radius: 20px;
+  padding: 20px;
+}
+/* 每第 5 个卡片跨 2 列 */
+.files-bento .file-card:nth-child(5n+1) {
+  grid-column: span 2;
+}
+/* 每第 7 个卡片跨 2 行 */
+.files-bento .file-card:nth-child(7n+3) {
+  grid-row: span 2;
+}
+
+/* ---------- 命令式布局：极简列表 ---------- */
+.files-command .toolbar {
+  display: none;
+}
+.files-command .file-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.files-command .file-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+}
+.files-command .file-card:hover {
+  background: var(--accent-soft);
+}
+.files-command .fc-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+}
+.files-command .fc-icon .el-icon {
+  font-size: 20px !important;
+}
+.files-command .fc-name {
+  flex: 1;
+  font-size: 14px;
+  font-family: inherit;
+}
+.files-command .fc-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.files-command .fc-actions {
+  display: none;
+}
+.files-command::before {
+  content: '⌘ 搜索文件...';
+  display: block;
+  padding: 12px 16px;
+  font-size: 16px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--glass-border);
+  margin-bottom: 8px;
+}
+
+/* ---------- 顶部导航布局：更紧凑 ---------- */
+.files-topnav .files-glass {
+  border-radius: 0;
+  margin: 0;
+}
+
+.stat-card {
+  position: relative;
+  cursor: default;
+  transition: all 0.2s;
+}
+
+/* ---------- 标签系统 ---------- */
+.tag-select {
+  width: 140px;
+}
+.tag-filter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tag-filter-item {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--glass-bg);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.tag-filter-item:hover {
+  background: var(--accent-soft);
+  transform: translateX(4px);
+}
+.tag-manage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.tag-manage-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--glass-bg);
+}
+.tag-badge {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+}
+.tag-input-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.tag-input-row .el-input {
+  flex: 1;
+}
+.tag-existing {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.tag-existing-label {
+  margin-right: 8px;
 }
 </style>

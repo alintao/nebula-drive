@@ -241,10 +241,31 @@ export async function fileRoutes(app: FastifyInstance) {
     if (!rec) return fail(reply, 404, '存储不存在');
 
     const zip = new AdmZip();
+    /** 递归添加目录内容到 zip */
+    function addDirRecursive(dirPath: string, zipFolder: string) {
+      const items = fs.readdirSync(dirPath);
+      for (const item of items) {
+        const itemPath = path.join(dirPath, item);
+        const stat = fs.statSync(itemPath);
+        if (stat.isDirectory()) {
+          addDirRecursive(itemPath, zipFolder ? `${zipFolder}/${item}` : item);
+        } else {
+          const zipEntryPath = zipFolder ? `${zipFolder}/${item}` : item;
+          zip.addLocalFile(itemPath, undefined, zipEntryPath);
+        }
+      }
+    }
     for (const p of b.paths) {
       const fullPath = path.join(dirs.storageRoot, p.replace(/^\//, ''));
-      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-        zip.addLocalFile(fullPath, undefined, p.replace(/^\//, '').split('/').pop() || p);
+      if (!fs.existsSync(fullPath)) continue;
+      const stat = fs.statSync(fullPath);
+      const zipBase = p.replace(/^\//, '').split('/').pop() || p;
+      if (stat.isDirectory()) {
+        // 文件夹：递归打包，以文件夹名为根
+        addDirRecursive(fullPath, zipBase);
+      } else {
+        // 文件：直接添加
+        zip.addLocalFile(fullPath, undefined, zipBase);
       }
     }
     const buffer = zip.toBuffer();
@@ -252,6 +273,78 @@ export async function fileRoutes(app: FastifyInstance) {
     reply.header('Content-Disposition', 'attachment; filename="batch-download.zip"');
     reply.header('Content-Length', buffer.length);
     return reply.send(buffer);
+  });
+
+  // ===== 压缩：将选中文件/文件夹打包为 zip 保存到服务器 =====
+  app.post('/files/compress', { preHandler: requirePermission('files:upload') }, async (req, reply) => {
+    const b = req.body as { storageId?: number; paths?: string[]; destPath?: string };
+    if (!b.paths?.length) return fail(reply, 400, '缺少文件列表');
+    const storageId = b.storageId || 0;
+    const rec = getStorageRecord(storageId);
+    if (!rec) return fail(reply, 404, '存储不存在');
+
+    // 默认保存到当前目录，文件名 = 第一个选中项名称 + .zip
+    const firstPath = b.paths[0].replace(/^\//, '');
+    const baseName = firstPath.split('/').pop() || 'archive';
+    const zipName = baseName.endsWith('.zip') ? baseName : baseName + '.zip';
+    const destDir = b.destPath ? path.join(dirs.storageRoot, b.destPath.replace(/^\//, '')) : dirs.storageRoot;
+    const zipPath = path.join(destDir, zipName);
+
+    const zip = new AdmZip();
+    function addDirRecursive(dirPath: string, zipFolder: string) {
+      const items = fs.readdirSync(dirPath);
+      for (const item of items) {
+        const itemPath = path.join(dirPath, item);
+        const stat = fs.statSync(itemPath);
+        if (stat.isDirectory()) {
+          addDirRecursive(itemPath, zipFolder ? `${zipFolder}/${item}` : item);
+        } else {
+          const zipEntryPath = zipFolder ? `${zipFolder}/${item}` : item;
+          zip.addLocalFile(itemPath, undefined, zipEntryPath);
+        }
+      }
+    }
+    for (const p of b.paths) {
+      const fullPath = path.join(dirs.storageRoot, p.replace(/^\//, ''));
+      if (!fs.existsSync(fullPath)) continue;
+      const stat = fs.statSync(fullPath);
+      const zipBase = p.replace(/^\//, '').split('/').pop() || p;
+      if (stat.isDirectory()) {
+        addDirRecursive(fullPath, zipBase);
+      } else {
+        zip.addLocalFile(fullPath, undefined, zipBase);
+      }
+    }
+    // 写入 zip 文件
+    fs.writeFileSync(zipPath, zip.toBuffer());
+    return ok(reply, { path: `/${zipName}`, name: zipName });
+  });
+
+  // ===== 解压：将 zip 文件解压到指定目录 =====
+  app.post('/files/decompress', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const b = req.body as { storageId?: number; path?: string; destPath?: string };
+    if (!b.path) return fail(reply, 400, '缺少 zip 文件路径');
+    const storageId = b.storageId || 0;
+    const rec = getStorageRecord(storageId);
+    if (!rec) return fail(reply, 404, '存储不存在');
+
+    const zipFullPath = path.join(dirs.storageRoot, b.path.replace(/^\//, ''));
+    if (!fs.existsSync(zipFullPath)) return fail(reply, 404, 'zip 文件不存在');
+    if (!fs.statSync(zipFullPath).isFile()) return fail(reply, 400, '不是文件');
+
+    // 默认解压到 zip 文件所在目录
+    const destDir = b.destPath
+      ? path.join(dirs.storageRoot, b.destPath.replace(/^\//, ''))
+      : path.dirname(zipFullPath);
+
+    try {
+      const zip = new AdmZip(zipFullPath); // 读取 zip 文件
+      zip.extractAllTo(destDir, true);
+      const entries = zip.getEntries();
+      return ok(reply, { extracted: entries.length });
+    } catch (e: any) {
+      return fail(reply, 500, '解压失败: ' + e.message);
+    }
   });
 
   // ===== 文件元数据（属性面板）=====

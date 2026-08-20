@@ -30,6 +30,7 @@ const DEFAULTS: Record<string, string> = {
   shareDefaultExpireDays: '0',
   recycleRetentionDays: '0',
   brandColor: '',
+  theme: 'light-glass',
   bgType: 'theme',
   bgImage: '',
   bgGradientFrom: '',
@@ -37,6 +38,7 @@ const DEFAULTS: Record<string, string> = {
   bgGradientAngle: '135',
   bgColor: '',
   bgOverlay: '40',
+  loginCaptchaThreshold: '3',
 };
 
 export function getSetting(key: string): string | null {
@@ -81,6 +83,7 @@ export function publicSettings() {
     maxFileSizeGB: settingNum('maxFileSizeGB', 0),
     shareDefaultExpireDays: settingNum('shareDefaultExpireDays', 0),
     brandColor: all.brandColor,
+    theme: all.theme || 'light-glass',
     bgType: all.bgType || 'theme',
     bgImage: all.bgImage,
     bgGradientFrom: all.bgGradientFrom,

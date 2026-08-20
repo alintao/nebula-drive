@@ -9,24 +9,60 @@ import {
   publicUser,
   createUser,
 } from '../services/user.service.js';
+import { profileService } from '../services/profile.service.js';
 import { getSetting, settingNum } from '../services/settings.service.js';
 import { getUserPermissions } from '../services/role.service.js';
+import {
+  createCaptcha,
+  verifyCaptcha,
+  recordLoginFailure,
+  clearLoginFailures,
+  getFailureCount,
+} from '../services/captcha.service.js';
 
 export async function authRoutes(app: FastifyInstance) {
+  // 获取验证码
+  app.get('/auth/captcha', async (_req, reply) => {
+    const { id, code } = createCaptcha();
+    return ok(reply, { id, code });
+  });
+
   app.post('/auth/login', async (req, reply) => {
-    const { username, password } = (req.body || {}) as { username?: string; password?: string };
+    const { username, password, captchaId, captchaCode } = (req.body || {}) as {
+      username?: string;
+      password?: string;
+      captchaId?: string;
+      captchaCode?: string;
+    };
     if (!username || !password) return fail(reply, 400, '请输入用户名和密码');
+
+    // 检查是否需要验证码
+    const threshold = settingNum('loginCaptchaThreshold', 3);
+    const failCount = getFailureCount(username);
+    if (threshold > 0 && failCount >= threshold) {
+      if (!captchaId || !captchaCode) {
+        return fail(reply, 401, '需要验证码', { requireCaptcha: true });
+      }
+      if (!verifyCaptcha(captchaId, captchaCode)) {
+        return fail(reply, 401, '验证码错误', { requireCaptcha: true });
+      }
+    }
+
     const ip = req.ip;
     const ua = String(req.headers['user-agent'] || '');
     const u = verifyLogin(username, password);
     if (!u) {
+      const count = recordLoginFailure(username);
       touchLogin(0, ip, ua, false);
-      return fail(reply, 401, '用户名或密码错误');
+      const needCaptcha = threshold > 0 && count >= threshold;
+      return fail(reply, 401, '用户名或密码错误', { requireCaptcha: needCaptcha, failCount: count });
     }
+    clearLoginFailures(username);
     touchLogin(u.id, ip, ua, true);
     const ttlSec = settingNum('sessionTimeoutHours', 168) * 3600;
     const token = signJwt({ sub: u.id, username: u.username, role: u.role }, jwtSecret, ttlSec);
-    return ok(reply, { token, user: { ...publicUser(u), permissions: getUserPermissions(u.role) } });
+    const profile = profileService.get(u.id);
+    return ok(reply, { token, user: { ...publicUser(u), avatar: profile.avatar || '', permissions: getUserPermissions(u.role) } });
   });
 
   app.post('/auth/logout', { preHandler: authMiddleware }, async (req, reply) => {
@@ -36,7 +72,8 @@ export async function authRoutes(app: FastifyInstance) {
   app.get('/auth/me', { preHandler: authMiddleware }, async (req, reply) => {
     const u = findById(req.user!.sub);
     if (!u) return fail(reply, 401, '用户不存在');
-    return ok(reply, { ...publicUser(u), permissions: getUserPermissions(u.role) });
+    const profile = profileService.get(u.id);
+    return ok(reply, { ...publicUser(u), avatar: profile.avatar || '', permissions: getUserPermissions(u.role) });
   });
 
   app.post('/auth/register', async (req, reply) => {

@@ -4,7 +4,7 @@ import { api } from '../api';
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: localStorage.getItem('nebula_token') || '',
-    user: null as null | { id: number; username: string; role: string; displayName: string; permissions?: string[] },
+    user: null as null | { id: number; username: string; role: string; displayName: string; avatar?: string; permissions?: string[] },
   }),
   getters: {
     /** 当前用户是否拥有某权限点 */

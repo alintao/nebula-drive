@@ -24,7 +24,11 @@ export async function api<T = any>(path: string, init: RequestInit & { raw?: boo
     throw new Error('未登录');
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(data.error || `请求失败 (${res.status})`) as Error & { data?: any };
+    err.data = data;
+    throw err;
+  }
   return data.data as T;
 }
 

@@ -9,6 +9,8 @@ import { searchHistoryService } from '../services/searchHistory.service.js';
 import { shareStatsService } from '../services/shareStats.service.js';
 import { getDb } from '../db/index.js';
 import { config } from '../config.js';
+import { findById, updateUser, publicUser } from '../services/user.service.js';
+import { verifyPassword } from '../auth/password.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -84,6 +86,29 @@ export async function extendedRoutes(app: FastifyInstance) {
     return ok(reply, { tags: tagService.allTags() });
   });
 
+  // 按标签筛选文件
+  app.get('/files-by-tag', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const q = req.query as { tag?: string };
+    if (!q.tag) return fail(reply, 400, '标签不能为空');
+    const files = tagService.filesByTag(q.tag);
+    return ok(reply, { files });
+  });
+
+  // 创建新标签
+  app.post('/tags', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const b = req.body as { tag?: string };
+    if (!b.tag?.trim()) return fail(reply, 400, '标签不能为空');
+    return ok(reply, { tags: tagService.allTags() });
+  });
+
+  // 删除标签
+  app.delete('/tags/:tag', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const tag = decodeURIComponent((req.params as { tag: string }).tag);
+    const db = getDb();
+    db.prepare('DELETE FROM file_tags WHERE tag = ?').run(tag);
+    return ok(reply, { tags: tagService.allTags() });
+  });
+
   // ===== 文件注释 =====
   app.get('/files/:path/comments', { preHandler: requirePermission('files:view') }, async (req, reply) => {
     const q = req.query as { storageId?: string };
@@ -143,6 +168,38 @@ export async function extendedRoutes(app: FastifyInstance) {
     } catch (e: any) {
       return fail(reply, 400, e?.message || '更新资料失败');
     }
+  });
+
+  // 修改账号（用户名/密码）
+  app.put('/profile/account', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const b = req.body as { username?: string; oldPassword?: string; newPassword?: string };
+    const userId = req.user!.sub;
+    const user = findById(userId);
+    if (!user) return fail(reply, 404, '用户不存在');
+
+    // 修改用户名
+    if (b.username && b.username !== user.username) {
+      if (b.username.length < 3 || b.username.length > 32) {
+        return fail(reply, 400, '用户名长度 3-32 位');
+      }
+      try {
+        updateUser(userId, { username: b.username });
+      } catch (e: any) {
+        return fail(reply, 409, e?.message?.includes('UNIQUE') ? '用户名已存在' : '修改用户名失败');
+      }
+    }
+
+    // 修改密码
+    if (b.newPassword) {
+      if (!b.oldPassword) return fail(reply, 400, '请输入原密码');
+      const valid = verifyPassword(b.oldPassword, user.password_hash);
+      if (!valid) return fail(reply, 401, '原密码错误');
+      if (b.newPassword.length < 8) return fail(reply, 400, '新密码至少 8 位');
+      updateUser(userId, { password: b.newPassword });
+    }
+
+    const updated = findById(userId)!;
+    return ok(reply, { user: publicUser(updated) });
   });
 
   // ===== 搜索历史 =====

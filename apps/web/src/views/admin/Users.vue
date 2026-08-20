@@ -239,7 +239,7 @@ onMounted(load);
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
             <el-button link type="primary" size="small" @click="doResetPassword(row)">重置密码</el-button>
-            <el-button link type="danger" size="small" @click="doDelete(row)">删除</el-button>
+            <el-button v-if="row.role !== 'admin'" link type="danger" size="small" @click="doDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

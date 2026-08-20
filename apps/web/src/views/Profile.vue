@@ -15,6 +15,46 @@ const searchHistory = ref<any[]>([]);
 const storageUsage = ref<any[]>([]);
 const saving = ref(false);
 const avatarUploading = ref(false);
+const avatarPreviewVisible = ref(false);
+
+function previewAvatar() {
+  if (profileForm.value.avatar) {
+    avatarPreviewVisible.value = true;
+  } else {
+    ElMessage.info('暂无头像');
+  }
+}
+
+/* ---------- 修改账号和密码 ---------- */
+const accountForm = ref({ username: '', oldPassword: '', newPassword: '', confirmPassword: '' });
+const accountSaving = ref(false);
+
+async function saveAccount() {
+  const { username, oldPassword, newPassword, confirmPassword } = accountForm.value;
+  if (!username) return ElMessage.warning('请输入新用户名');
+  if (username.length < 3 || username.length > 32) return ElMessage.warning('用户名长度 3-32 位');
+  if (newPassword && newPassword !== confirmPassword) return ElMessage.warning('两次密码不一致');
+  if (newPassword && newPassword.length < 8) return ElMessage.warning('新密码至少 8 位');
+  accountSaving.value = true;
+  try {
+    await api('/profile/account', {
+      method: 'PUT',
+      body: JSON.stringify({
+        username: username || undefined,
+        oldPassword: oldPassword || undefined,
+        newPassword: newPassword || undefined,
+      }),
+    });
+    ElMessage.success('账号已更新');
+    accountForm.value = { username: '', oldPassword: '', newPassword: '', confirmPassword: '' };
+    // 刷新用户信息
+    await auth.me();
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新失败');
+  } finally {
+    accountSaving.value = false;
+  }
+}
 
 async function loadProfile() {
   try {
@@ -132,7 +172,7 @@ onMounted(async () => {
         <h2 class="section-title">个人资料</h2>
         <div v-loading="profileLoading" class="profile-body">
           <div class="avatar-section">
-            <el-avatar :size="80" :src="profileForm.avatar || undefined">
+            <el-avatar :size="80" :src="profileForm.avatar || undefined" class="avatar-clickable" @click="previewAvatar">
               <el-icon><User /></el-icon>
             </el-avatar>
             <div class="avatar-info">
@@ -164,6 +204,26 @@ onMounted(async () => {
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="saving" @click="saveProfile">保存资料</el-button>
+            </el-form-item>
+          </el-form>
+
+          <!-- 修改账号和密码 -->
+          <h2 class="section-title" style="margin-top: 28px">修改账号</h2>
+          <el-form label-width="80px">
+            <el-form-item label="用户名">
+              <el-input v-model="accountForm.username" placeholder="新用户名（留空则不修改）" />
+            </el-form-item>
+            <el-form-item label="原密码">
+              <el-input v-model="accountForm.oldPassword" type="password" placeholder="原密码（修改密码时必填）" show-password />
+            </el-form-item>
+            <el-form-item label="新密码">
+              <el-input v-model="accountForm.newPassword" type="password" placeholder="新密码（至少 8 位）" show-password />
+            </el-form-item>
+            <el-form-item label="确认密码">
+              <el-input v-model="accountForm.confirmPassword" type="password" placeholder="再次输入新密码" show-password />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="accountSaving" @click="saveAccount">保存修改</el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -224,6 +284,13 @@ onMounted(async () => {
       </div>
     </div>
   </div>
+
+  <!-- 头像预览对话框 -->
+  <el-dialog v-model="avatarPreviewVisible" title="头像预览" width="640px">
+    <div style="text-align: center; padding: 20px;">
+      <img :src="profileForm.avatar" alt="头像" style="max-width: 100%; max-height: 600px; border-radius: 16px;" />
+    </div>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -261,6 +328,14 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+.avatar-clickable {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.avatar-clickable:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 .avatar-name {
   font-size: 18px;

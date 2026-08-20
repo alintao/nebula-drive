@@ -2,10 +2,12 @@ import { ref, readonly, computed } from 'vue';
 
 /** 主题元数据 */
 export const THEMES = {
-  'light-glass': { label: '浅色毛玻璃', icon: '☀️', isGlass: true },
-  'dark-glass': { label: '深色毛玻璃', icon: '🌙', isGlass: true },
-  minimal: { label: '极简经典', icon: '▢', isGlass: false },
-  silver: { label: '银灰', icon: '◈', isGlass: true },
+  'light-glass': { label: '毛玻璃', icon: '☀️', isGlass: true, layout: 'sidebar' },
+  'dark-glass': { label: '深色玻璃', icon: '🌙', isGlass: true, layout: 'sidebar' },
+  'top-nav': { label: '顶部导航', icon: '▬', isGlass: false, layout: 'topnav' },
+  'dashboard': { label: '仪表盘', icon: '📊', isGlass: true, layout: 'dashboard' },
+  'bento': { label: '便当盒', icon: '▦', isGlass: true, layout: 'bento' },
+  'command': { label: '命令式', icon: '⌘', isGlass: false, layout: 'command' },
 } as const;
 
 export type ThemeKey = keyof typeof THEMES;

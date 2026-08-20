@@ -11,6 +11,23 @@ const username = ref('');
 const password = ref('');
 const loading = ref(false);
 
+/* ---------- 验证码相关 ---------- */
+const captchaRequired = ref(false);
+const captchaId = ref('');
+const captchaCode = ref('');
+const captchaInput = ref('');
+const captchaError = ref('');
+
+async function loadCaptcha() {
+  try {
+    const r = await api('/auth/captcha');
+    captchaId.value = r.id;
+    captchaCode.value = r.code;
+  } catch {
+    /* 忽略 */
+  }
+}
+
 /* ---------- 注册相关 ---------- */
 const showRegister = ref(false);
 const regUsername = ref('');
@@ -82,13 +99,37 @@ async function doLogin() {
     ElMessage.warning('请输入用户名和密码');
     return;
   }
+  if (captchaRequired.value && !captchaInput.value) {
+    ElMessage.warning('请输入验证码');
+    return;
+  }
   loading.value = true;
+  captchaError.value = '';
   try {
-    await auth.login(username.value.trim(), password.value);
+    const r = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: username.value.trim(),
+        password: password.value,
+        captchaId: captchaRequired.value ? captchaId.value : undefined,
+        captchaCode: captchaRequired.value ? captchaInput.value : undefined,
+      }),
+    });
+    auth.token = r.token;
+    auth.user = r.user;
+    localStorage.setItem('nebula_token', r.token);
     ElMessage.success('登录成功');
     router.push('/');
   } catch (e: any) {
-    ElMessage.error(e.message || '登录失败');
+    // 检查是否需要验证码
+    const data = e.data || {};
+    if (data.requireCaptcha) {
+      captchaRequired.value = true;
+      await loadCaptcha();
+      captchaError.value = e.message || '需要验证码';
+    } else {
+      captchaError.value = e.message || '登录失败';
+    }
   } finally {
     loading.value = false;
   }
@@ -119,6 +160,20 @@ async function doLogin() {
             @keyup.enter="doLogin"
           />
         </el-form-item>
+        <!-- 验证码 -->
+        <el-form-item v-if="captchaRequired" label="验证码">
+          <div class="captcha-row">
+            <el-input
+              v-model="captchaInput"
+              placeholder="请输入验证码"
+              @keyup.enter="doLogin"
+            />
+            <div class="captcha-img" @click="loadCaptcha" title="点击刷新">
+              <span class="captcha-text">{{ captchaCode }}</span>
+            </div>
+          </div>
+        </el-form-item>
+        <div v-if="captchaError" class="captcha-error">{{ captchaError }}</div>
         <el-button type="primary" class="login-btn" :loading="loading" @click="doLogin">
           登 录
         </el-button>
@@ -234,6 +289,36 @@ async function doLogin() {
 }
 .login-btn {
   width: 100%;
+}
+.captcha-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.captcha-row .el-input {
+  flex: 1;
+}
+.captcha-img {
+  width: 100px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+}
+.captcha-text {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 4px;
+}
+.captcha-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #ef4444;
 }
 .register-link {
   margin-top: 14px;

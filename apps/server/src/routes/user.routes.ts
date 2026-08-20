@@ -54,6 +54,9 @@ export async function userRoutes(app: FastifyInstance) {
   app.delete('/users/:id', { preHandler: requirePermission('users:manage') }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     if (id === req.user!.sub) return fail(reply, 400, '不能删除自己');
+    // 禁止删除管理员账号
+    const target = findById(id);
+    if (target?.role === 'admin') return fail(reply, 403, '管理员账号不可删除');
     try {
       deleteUser(id);
       return ok(reply, { ok: true });

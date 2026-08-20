@@ -44,6 +44,6 @@ export function ok<T>(reply: FastifyReply, data: T) {
   return reply.send({ data });
 }
 
-export function fail(reply: FastifyReply, code: number, error: string) {
-  return reply.code(code).send({ error });
+export function fail(reply: FastifyReply, code: number, error: string, extra?: Record<string, any>) {
+  return reply.code(code).send({ error, ...(extra || {}) });
 }

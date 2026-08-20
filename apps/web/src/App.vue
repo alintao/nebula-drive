@@ -11,6 +11,12 @@ const router = useRouter();
 const auth = useAuthStore();
 const { theme, setTheme, isGlassTheme } = useTheme();
 
+// 布局类型（根据主题决定）
+const layoutType = computed(() => {
+  const t = THEMES[theme.value as ThemeKey];
+  return t?.layout || 'sidebar';
+});
+
 const appName = ref('NebulaDrive 星云网盘');
 const collapsed = ref(false);
 const showThemePicker = ref(false);
@@ -153,6 +159,82 @@ const adminMenuAll = [
 const mainMenu = computed(() => mainMenuAll.filter((m) => !m.perm || perm(m.perm)));
 const adminMenu = computed(() => adminMenuAll.filter((m) => !m.perm || perm(m.perm)));
 
+/* ---------- 导航菜单拖拽自定义 ---------- */
+const isCustomizingNav = ref(false);
+const navDragItem = ref<string | null>(null);
+const navDragOver = ref<string | null>(null);
+const mainMenuOrder = ref<string[]>(loadNavOrder('main'));
+const adminMenuOrder = ref<string[]>(loadNavOrder('admin'));
+
+function loadNavOrder(type: string): string[] {
+  try {
+    const saved = localStorage.getItem('nebula_nav_order_' + type);
+    if (saved) return JSON.parse(saved);
+  } catch { /* ignore */ }
+  return type === 'main'
+    ? mainMenuAll.map(m => m.path)
+    : adminMenuAll.map(m => m.path);
+}
+
+function saveNavOrder() {
+  try {
+    localStorage.setItem('nebula_nav_order_main', JSON.stringify(mainMenuOrder.value));
+    localStorage.setItem('nebula_nav_order_admin', JSON.stringify(adminMenuOrder.value));
+  } catch { /* ignore */ }
+}
+
+// 按自定义顺序排序菜单
+const orderedMainMenu = computed(() => {
+  const order = mainMenuOrder.value;
+  return [...mainMenu.value].sort((a, b) => {
+    const ia = order.indexOf(a.path);
+    const ib = order.indexOf(b.path);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+});
+
+const orderedAdminMenu = computed(() => {
+  const order = adminMenuOrder.value;
+  return [...adminMenu.value].sort((a, b) => {
+    const ia = order.indexOf(a.path);
+    const ib = order.indexOf(b.path);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+});
+
+function onNavDragStart(path: string) {
+  navDragItem.value = path;
+}
+
+function onNavDragOver(path: string) {
+  navDragOver.value = path;
+}
+
+function onNavDrop(path: string) {
+  if (!navDragItem.value || navDragItem.value === path) return;
+  // 判断是主菜单还是管理菜单
+  const isMain = mainMenuAll.some(m => m.path === navDragItem.value);
+  const order = isMain ? mainMenuOrder.value : adminMenuOrder.value;
+  const from = order.indexOf(navDragItem.value);
+  const to = order.indexOf(path);
+  if (from >= 0 && to >= 0) {
+    order.splice(to, 0, order.splice(from, 1)[0]);
+    saveNavOrder();
+  }
+  navDragItem.value = null;
+  navDragOver.value = null;
+}
+
+function onNavDragEnd() {
+  navDragItem.value = null;
+  navDragOver.value = null;
+}
+
+function toggleCustomizeNav() {
+  isCustomizingNav.value = !isCustomizingNav.value;
+  if (!isCustomizingNav.value) saveNavOrder();
+}
+
 onMounted(async () => {
   if (auth.token) {
     await auth.me();
@@ -160,6 +242,10 @@ onMounted(async () => {
   try {
     const s = await api('/settings');
     if (s?.appName) appName.value = s.appName;
+    // 应用主题（后端设置优先）
+    if (s?.theme) {
+      document.documentElement.setAttribute('data-theme', s.theme);
+    }
     applyBrandColor(s?.brandColor);
     applyBackground(s);
   } catch {
@@ -231,9 +317,9 @@ function applyBackground(s?: any) {
     <div class="app-bg" aria-hidden="true" />
     <div class="app-overlay" aria-hidden="true" />
 
-    <div class="layout">
-      <!-- 侧边栏（玻璃） -->
-      <aside class="aside glass" :class="{ collapsed }">
+    <div class="layout" :class="{ 'layout-topnav': layoutType === 'topnav' }">
+      <!-- 侧边栏（sidebar/dashboard/bento 布局） -->
+      <aside v-if="layoutType !== 'topnav'" class="aside glass" :class="{ collapsed }">
         <div class="logo">
           <div class="logo-badge">
             <el-icon :size="20"><Cloudy /></el-icon>
@@ -251,41 +337,56 @@ function applyBackground(s?: any) {
           </button>
         </div>
 
-        <nav class="menu">
+        <nav class="menu" :class="{ customizing: isCustomizingNav }">
           <button
-            v-for="item in mainMenu"
+            v-for="item in orderedMainMenu"
             :key="item.path"
             class="menu-item"
-            :class="{ active: route.path === item.path }"
+            :class="{ active: route.path === item.path, dragging: navDragItem === item.path, 'drag-over': navDragOver === item.path && navDragItem !== item.path }"
             :title="collapsed ? item.label : undefined"
-            @click="router.push(item.path)"
+            :draggable="isCustomizingNav"
+            @dragstart="onNavDragStart(item.path)"
+            @dragover="onNavDragOver(item.path)"
+            @drop="onNavDrop(item.path)"
+            @dragend="onNavDragEnd"
+            @click="isCustomizingNav ? null : router.push(item.path)"
           >
             <el-icon><component :is="item.icon" /></el-icon>
             <span v-if="!collapsed" class="menu-label">{{ item.label }}</span>
+            <span v-if="isCustomizingNav && !collapsed" class="drag-handle"><el-icon><Rank /></el-icon></span>
           </button>
 
           <template v-if="isAdmin">
             <div v-if="!collapsed" class="menu-group">系统管理</div>
             <button
-              v-for="item in adminMenu"
+              v-for="item in orderedAdminMenu"
               :key="item.path"
               class="menu-item"
-              :class="{ active: route.path === item.path }"
+              :class="{ active: route.path === item.path, dragging: navDragItem === item.path, 'drag-over': navDragOver === item.path && navDragItem !== item.path }"
               :title="collapsed ? item.label : undefined"
-              @click="router.push(item.path)"
+              :draggable="isCustomizingNav"
+              @dragstart="onNavDragStart(item.path)"
+              @dragover="onNavDragOver(item.path)"
+              @drop="onNavDrop(item.path)"
+              @dragend="onNavDragEnd"
+              @click="isCustomizingNav ? null : router.push(item.path)"
             >
               <el-icon><component :is="item.icon" /></el-icon>
               <span v-if="!collapsed" class="menu-label">{{ item.label }}</span>
+              <span v-if="isCustomizingNav && !collapsed" class="drag-handle"><el-icon><Rank /></el-icon></span>
             </button>
           </template>
         </nav>
 
         <div class="aside-footer">
           <div class="user-chip">
-            <div class="avatar">{{ (auth.user?.displayName || auth.user?.username || 'U').charAt(0) }}</div>
+            <div class="avatar">
+              <img v-if="auth.user?.avatar" :src="auth.user.avatar" alt="avatar" />
+              <span v-else>{{ (auth.user?.displayName || auth.user?.username || 'U').charAt(0) }}</span>
+            </div>
             <div v-if="!collapsed" class="user-info">
               <p class="user-name">{{ auth.user?.displayName || auth.user?.username || '未登录' }}</p>
-              <p class="user-role">{{ isAdmin ? '管理员' : '普通用户' }}</p>
+              <p class="user-role">{{ auth.user?.displayName || auth.user?.username || '未登录' }}</p>
             </div>
           </div>
         </div>
@@ -293,7 +394,47 @@ function applyBackground(s?: any) {
 
       <!-- 主体：顶栏 + 内容 -->
       <div class="body">
-        <header class="header glass">
+        <!-- 顶部导航栏（topnav 布局） -->
+        <div v-if="layoutType === 'topnav'" class="topnav glass">
+          <div class="topnav-logo">
+            <el-icon :size="24"><Cloudy /></el-icon>
+            <span class="topnav-name">{{ appName }}</span>
+          </div>
+          <nav class="topnav-menu">
+            <button
+              v-for="item in mainMenu"
+              :key="item.path"
+              class="topnav-item"
+              :class="{ active: route.path === item.path }"
+              @click="router.push(item.path)"
+            >
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span>{{ item.label }}</span>
+            </button>
+            <template v-if="isAdmin">
+              <div class="topnav-sep"></div>
+              <button
+                v-for="item in adminMenu"
+                :key="item.path"
+                class="topnav-item"
+                :class="{ active: route.path === item.path }"
+                @click="router.push(item.path)"
+              >
+                <el-icon><component :is="item.icon" /></el-icon>
+                <span>{{ item.label }}</span>
+              </button>
+            </template>
+          </nav>
+          <div class="topnav-user">
+            <div class="avatar-sm">
+              <img v-if="auth.user?.avatar" :src="auth.user.avatar" alt="avatar" />
+              <span v-else>{{ (auth.user?.displayName || auth.user?.username || 'U').charAt(0) }}</span>
+            </div>
+            <span class="topnav-username">{{ auth.user?.displayName || auth.user?.username || '未登录' }}</span>
+            <button class="topnav-logout" @click="logout">退出</button>
+          </div>
+        </div>
+        <header class="header glass" v-if="layoutType !== 'topnav'">
           <div class="page-title">{{ pageTitle }}</div>
           <div class="header-right">
             <!-- 主题切换：太阳/月亮按钮 + 四主题快选 -->
@@ -319,8 +460,7 @@ function applyBackground(s?: any) {
                 </button>
               </div>
             </div>
-            <el-tag v-if="isAdmin" type="danger" size="small" effect="light">管理员</el-tag>
-            <span class="user-name">{{ auth.user?.username || '未登录' }}</span>
+            <span class="user-name">{{ auth.user?.displayName || auth.user?.username || '未登录' }}</span>
             <button class="logout-btn glass-btn" @click="logout">退出登录</button>
           </div>
         </header>
@@ -361,6 +501,106 @@ function applyBackground(s?: any) {
   gap: 14px;
   padding: 14px;
 }
+.layout.layout-topnav {
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+}
+.layout-topnav .body {
+  height: 100%;
+}
+
+/* ---------- 顶部导航栏 ---------- */
+.topnav {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-radius: 0;
+  flex-shrink: 0;
+}
+.topnav-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+.topnav-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+.topnav-menu {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.topnav-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+.topnav-item:hover {
+  background: var(--glass-bg-hover);
+  color: var(--text);
+}
+.topnav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.topnav-sep {
+  width: 1px;
+  height: 24px;
+  background: var(--glass-border);
+  margin: 0 8px;
+}
+.topnav-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.avatar-sm {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+}
+.avatar-sm img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.topnav-username {
+  font-size: 14px;
+  color: var(--text);
+}
+.topnav-logout {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+}
+.topnav-logout:hover {
+  background: var(--glass-bg-hover);
+  color: var(--text);
+}
 
 /* ---------- 侧边栏 ---------- */
 .aside {
@@ -370,6 +610,9 @@ function applyBackground(s?: any) {
   border-radius: 22px;
   overflow: hidden;
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  z-index: 20;
+  pointer-events: auto;
 }
 .aside.collapsed {
   width: 78px;
@@ -486,6 +729,71 @@ function applyBackground(s?: any) {
   color: var(--accent);
 }
 
+/* 导航菜单拖拽 */
+.menu.customizing {
+  cursor: grab;
+}
+.menu.customizing .menu-item {
+  cursor: grab;
+  transition: all 0.2s;
+}
+.menu.customizing .menu-item:active {
+  cursor: grabbing;
+}
+.menu-item.dragging {
+  opacity: 0.5;
+  transform: scale(0.95);
+}
+.menu-item.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.drag-handle {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.nav-customize-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+.nav-customize-done {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+.nav-customize-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 20px);
+  margin: 0 10px 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--glass-border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+.nav-customize-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .aside-footer {
   padding: 12px 10px;
   border-top: 1px solid var(--glass-border);
@@ -512,6 +820,12 @@ function applyBackground(s?: any) {
   font-weight: 700;
   font-size: 14px;
   flex-shrink: 0;
+  overflow: hidden;
+}
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .user-info {
   min-width: 0;
