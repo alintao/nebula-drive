@@ -7,6 +7,12 @@ data/
 storage/
 tmp_update/
 tmp_pkg/
+tmp_pack/
+test_extract/
+gh_extract/
+gh_verify/
+gh_test.zip
+update_release.py
 .env
 .env.local
 *.local

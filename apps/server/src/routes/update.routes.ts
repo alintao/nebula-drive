@@ -3,6 +3,65 @@ import { ok, fail, requirePermission } from '../auth/middleware';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync, spawn } from 'node:child_process';
+import http from 'node:http';
+import https from 'node:https';
+import { URL } from 'node:url';
+
+// 代理支持：检测系统代理环境变量
+const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
+
+/** 通过代理发起 HTTPS 请求（兼容无代理环境，支持重定向） */
+function httpsGet(targetUrl: string, headers: Record<string, string> = {}): Promise<{ status: number; json(): Promise<any>; arrayBuffer(): Promise<ArrayBuffer> }> {
+  return new Promise((resolve, reject) => {
+    const doRequest = (url: string, redirectCount = 0) => {
+      if (redirectCount > 5) { reject(new Error('Too many redirects')); return; }
+      const parsed = new URL(url);
+
+      const handler = (res: http.IncomingMessage) => {
+        // 处理 301/302/307 重定向
+        if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307) && res.headers.location) {
+          doRequest(res.headers.location, redirectCount + 1);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const body = Buffer.concat(chunks);
+          resolve({
+            status: res.statusCode || 200,
+            json: async () => JSON.parse(body.toString()),
+            arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+          });
+        });
+      };
+
+      if (proxyUrl) {
+        const proxy = new URL(proxyUrl);
+        const options = {
+          host: proxy.hostname,
+          port: proxy.port || 80,
+          path: url,
+          method: 'GET',
+          headers: { ...headers, Host: parsed.host },
+        };
+        const req = http.request(options, handler);
+        req.on('error', reject);
+        req.end();
+      } else {
+        const options = {
+          hostname: parsed.hostname,
+          path: parsed.pathname + parsed.search,
+          method: 'GET',
+          headers,
+        };
+        const req = https.request(options, handler);
+        req.on('error', reject);
+        req.end();
+      }
+    };
+    doRequest(targetUrl);
+  });
+}
 
 // 从 package.json 读取当前版本
 function getCurrentVersion(): string {
@@ -47,11 +106,9 @@ export async function updateRoutes(app: FastifyInstance) {
     
     try {
       // 从 GitHub API 获取最新 release
-      const res = await fetch('https://api.github.com/repos/yihuansan/nebula-drive/releases/latest', {
-        headers: {
-          'User-Agent': 'NebulaDrive',
-          'Accept': 'application/vnd.github.v3+json',
-        },
+      const res = await httpsGet('https://api.github.com/repos/yihuansan/nebula-drive/releases/latest', {
+        'User-Agent': 'NebulaDrive',
+        'Accept': 'application/vnd.github.v3+json',
       });
       
       // 404 = 还没有创建任何 release
@@ -103,13 +160,11 @@ export async function updateRoutes(app: FastifyInstance) {
   app.post('/system/perform-update', { preHandler: requirePermission('settings:view') }, async (_req, reply) => {
     try {
       // 1. 获取最新 release 信息
-      const res = await fetch('https://api.github.com/repos/yihuansan/nebula-drive/releases/latest', {
-        headers: {
-          'User-Agent': 'NebulaDrive',
-          'Accept': 'application/vnd.github.v3+json',
-        },
+      const res = await httpsGet('https://api.github.com/repos/yihuansan/nebula-drive/releases/latest', {
+        'User-Agent': 'NebulaDrive',
+        'Accept': 'application/vnd.github.v3+json',
       });
-      if (!res.ok) {
+      if (res.status !== 200) {
         return fail(reply, 500, '无法获取最新版本信息');
       }
       const latest = await res.json();
@@ -125,10 +180,8 @@ export async function updateRoutes(app: FastifyInstance) {
       const zipPath = path.join(tmpDir, 'update.zip');
       
       // 下载 zip
-      const zipRes = await fetch(asset.browser_download_url, {
-        headers: { 'User-Agent': 'NebulaDrive' },
-      });
-      if (!zipRes.ok) {
+      const zipRes = await httpsGet(asset.browser_download_url, { 'User-Agent': 'NebulaDrive' });
+      if (zipRes.status !== 200) {
         return fail(reply, 500, '下载版本包失败');
       }
       
@@ -245,14 +298,12 @@ export async function updateRoutes(app: FastifyInstance) {
    */
   app.get('/system/update-log', { preHandler: requirePermission('settings:view') }, async (req, reply) => {
     try {
-      const res = await fetch('https://api.github.com/repos/yihuansan/nebula-drive/releases?per_page=5', {
-        headers: {
-          'User-Agent': 'NebulaDrive',
-          'Accept': 'application/vnd.github.v3+json',
-        },
+      const res = await httpsGet('https://api.github.com/repos/yihuansan/nebula-drive/releases?per_page=5', {
+        'User-Agent': 'NebulaDrive',
+        'Accept': 'application/vnd.github.v3+json',
       });
       
-      if (!res.ok) {
+      if (res.status !== 200) {
         return fail(reply, 500, '无法获取更新日志');
       }
       
