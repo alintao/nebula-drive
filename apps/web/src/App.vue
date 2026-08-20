@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 import { api } from './api';
 import { useTheme, THEMES, type ThemeKey } from './useTheme';
+import { ElMessage, ElMessageBox } from 'element-plus';
 
 const route = useRoute();
 const router = useRouter();
@@ -13,6 +14,54 @@ const { theme, setTheme, isGlassTheme } = useTheme();
 const appName = ref('NebulaDrive 星云网盘');
 const collapsed = ref(false);
 const showThemePicker = ref(false);
+
+// 更新检查状态
+const updateInfo = ref<{ currentVersion: string; latestVersion: string; isUpdateAvailable: boolean; releaseNotes: string; publishedAt: string } | null>(null);
+const updateChecking = ref(false);
+const showUpdateBanner = ref(false);
+
+/** 检查更新 */
+async function checkUpdate() {
+  updateChecking.value = true;
+  try {
+    const r = await api('/system/check-update');
+    updateInfo.value = r;
+    if (r.isUpdateAvailable && !localStorage.getItem('nebula_update_dismissed_' + r.latestVersion)) {
+      showUpdateBanner.value = true;
+    }
+  } catch (e: any) {
+    // 静默失败，不影响正常使用
+    console.warn('检查更新失败:', e.message);
+  } finally {
+    updateChecking.value = false;
+  }
+}
+
+/** 忽略本次更新提示 */
+function dismissUpdate() {
+  if (updateInfo.value) {
+    localStorage.setItem('nebula_update_dismissed_' + updateInfo.value.latestVersion, '1');
+  }
+  showUpdateBanner.value = false;
+}
+
+/** 查看更新详情 */
+async function viewUpdateDetails() {
+  try {
+    const r = await api('/system/update-log');
+    const latest = r.releases?.[0];
+    if (latest) {
+      ElMessageBox({
+        title: `版本 v${latest.version}`,
+        message: latest.notes || '无更新说明',
+        dangerouslyUseHTMLString: true,
+        confirmButtonText: '关闭',
+      });
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '获取更新详情失败');
+  }
+}
 
 const bare = computed(() => !route.meta?.auth);
 const isAdmin = computed(() => auth.user?.role === 'admin');
@@ -81,6 +130,8 @@ onMounted(async () => {
   if (route.meta?.admin && auth.user?.role !== 'admin') {
     router.replace('/');
   }
+  // 检查更新（延迟 2 秒，不阻塞页面加载）
+  setTimeout(() => checkUpdate(), 2000);
 });
 
 function logout() {
@@ -235,6 +286,19 @@ function applyBackground(s?: any) {
             <button class="logout-btn glass-btn" @click="logout">退出登录</button>
           </div>
         </header>
+
+        <!-- 更新提示横幅 -->
+        <div v-if="showUpdateBanner && updateInfo" class="update-banner glass">
+          <el-icon :size="18" class="update-icon"><Bell /></el-icon>
+          <div class="update-info">
+            <span class="update-title">发现新版本 v{{ updateInfo.latestVersion }}</span>
+            <span class="update-sub">当前版本 v{{ updateInfo.currentVersion }}</span>
+          </div>
+          <div class="update-actions">
+            <el-button size="small" @click="viewUpdateDetails">查看详情</el-button>
+            <el-button size="small" type="primary" @click="dismissUpdate">忽略</el-button>
+          </div>
+        </div>
 
         <main class="main">
           <router-view />
@@ -528,5 +592,41 @@ function applyBackground(s?: any) {
   flex: 1;
   overflow: auto;
   padding: 4px;
+}
+
+/* 更新提示横幅 */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+  background: linear-gradient(135deg, var(--accent-soft), transparent);
+  border: 1px solid var(--glass-border);
+}
+.update-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.update-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.update-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+.update-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.update-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 </style>

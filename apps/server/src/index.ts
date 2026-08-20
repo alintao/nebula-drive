@@ -25,6 +25,7 @@ import { syncRoutes } from './routes/sync.routes.js';
 import { roleRoutes } from './routes/role.routes.js';
 import { extendedRoutes } from './routes/extended.routes.js';
 import { newFeaturesRoutes } from './routes/new-features.routes.js';
+import { updateRoutes } from './routes/update.routes.js';
 import { uploadService } from './services/upload.service.js';
 import { recycleService } from './services/recycle.service.js';
 import { settingNum } from './services/settings.service.js';
@@ -97,6 +98,7 @@ async function buildApp(): Promise<FastifyInstance> {
     await instance.register(roleRoutes);
     await instance.register(extendedRoutes);
     await instance.register(newFeaturesRoutes);
+    await instance.register(updateRoutes);
   };
   await app.register(api, { prefix: '/api/v1' });
 

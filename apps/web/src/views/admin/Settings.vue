@@ -29,6 +29,27 @@ const form = ref({
 const saving = ref(false);
 const bgUploading = ref(false);
 
+// 更新检查
+const updateInfo = ref<{ currentVersion: string; latestVersion: string; isUpdateAvailable: boolean } | null>(null);
+const updateChecking = ref(false);
+
+async function checkUpdate() {
+  updateChecking.value = true;
+  try {
+    const r = await api('/system/check-update');
+    updateInfo.value = r;
+    if (r.isUpdateAvailable) {
+      ElMessage.success(`发现新版本 v${r.latestVersion}`);
+    } else {
+      ElMessage.info('已是最新版本');
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '检查更新失败');
+  } finally {
+    updateChecking.value = false;
+  }
+}
+
 async function load() {
   try {
     const s = await api('/settings');
@@ -87,12 +108,31 @@ async function doSave() {
         bgOverlay: String(form.value.bgOverlay),
       }),
     });
+    // 立即应用品牌色
+    applyBrandColorNow();
     ElMessage.success('设置已保存');
   } catch (e: any) {
     ElMessage.error(e.message || '保存失败');
   } finally {
     saving.value = false;
   }
+}
+
+/** 立即应用品牌色（无需刷新） */
+function applyBrandColorNow() {
+  const root = document.documentElement;
+  const color = form.value.brandColor;
+  if (!color || !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) {
+    root.style.removeProperty('--accent');
+    root.style.removeProperty('--accent-soft');
+    return;
+  }
+  const hex = color.length === 4 ? '#' + color[1] + color[1] + color[2] + color[2] + color[3] + color[3] : color;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  root.style.setProperty('--accent', color);
+  root.style.setProperty('--accent-soft', `rgba(${r}, ${g}, ${b}, 0.18)`);
 }
 
 async function uploadBackground(file: File) {
@@ -321,6 +361,36 @@ onMounted(load);
               <el-color-picker v-model="form.brandColor" />
               <el-button v-if="form.brandColor" link size="small" @click="form.brandColor = ''">恢复默认</el-button>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 在线更新 -->
+      <section class="panel glass-card">
+        <div class="panel-head">
+          <div class="panel-icon pi-purple"><el-icon><Refresh /></el-icon></div>
+          <div>
+            <h3>在线更新</h3>
+            <p>从 GitHub 检查最新版本</p>
+          </div>
+        </div>
+        <div class="rows">
+          <div class="row">
+            <span class="row-label">当前版本</span>
+            <span class="row-value">{{ updateInfo?.currentVersion || '加载中...' }}</span>
+          </div>
+          <div class="row">
+            <span class="row-label">最新版本</span>
+            <span class="row-value" :class="{ 'update-available': updateInfo?.isUpdateAvailable }">
+              {{ updateInfo?.latestVersion || '检查中...' }}
+              <el-tag v-if="updateInfo?.isUpdateAvailable" type="warning" size="small">有新版本</el-tag>
+            </span>
+          </div>
+          <div class="row">
+            <span class="row-label"></span>
+            <el-button size="small" :loading="updateChecking" @click="checkUpdate">
+              <el-icon><Refresh /></el-icon>&nbsp;检查更新
+            </el-button>
           </div>
         </div>
       </section>
