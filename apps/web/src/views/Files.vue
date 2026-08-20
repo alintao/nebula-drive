@@ -418,12 +418,11 @@ async function openPreview(row: any) {
         }
       }
     } else {
-      // 视频 / 音频：用 ?token= 直连流地址，支持 Range 拖动
-      previewUrl.value = `${base}&token=${encodeURIComponent(token)}`;
-      const res = await fetch(`${base}&token=${encodeURIComponent(token)}`, {
-        headers: { Range: 'bytes=0-0' },
-      });
+      // 视频 / 音频：用 Bearer 头获取 blob（认证可靠）
+      const res = await fetch(base, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error('预览加载失败');
+      const blob = await res.blob();
+      previewUrl.value = URL.createObjectURL(blob);
     }
   } catch (e: any) {
     ElMessage.error(e.message || '预览加载失败');
