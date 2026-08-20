@@ -31,7 +31,7 @@ function getCurrentVersion(): string {
  * 从 GitHub Releases 检查最新版本
  */
 // 缓存：避免频繁请求 GitHub API（1 小时 TTL）
-const updateCache: { data: any; time: number } | null = null;
+let updateCache: { data: any; time: number } | null = null;
 const CACHE_TTL = 60 * 60 * 1000; // 1 小时
 
 export async function updateRoutes(app: FastifyInstance) {
@@ -88,8 +88,7 @@ export async function updateRoutes(app: FastifyInstance) {
       };
       
       // 更新缓存
-      updateCache.data = result;
-      updateCache.time = Date.now();
+      updateCache = { data: result, time: Date.now() };
       
       return ok(reply, result);
     } catch (e: any) {
