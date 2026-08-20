@@ -52,6 +52,8 @@ async function checkUpdate() {
 
 async function load() {
   try {
+    // 自动检查更新
+    checkUpdate();
     const s = await api('/settings');
     form.value.appName = s.appName || 'NebulaDrive 星云网盘';
     form.value.logo = s.logo || '';

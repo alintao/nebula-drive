@@ -4,14 +4,23 @@ export async function api<T = any>(path: string, init: RequestInit & { raw?: boo
   const token = localStorage.getItem('nebula_token');
   const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  // 仅当 body 为字符串且未显式指定 Content-Type 时补 JSON 头（FormData 需保留自动 boundary）
+  // 仅当 body 为对象时序列化为 JSON 字符串
+  if (init.body && typeof init.body === 'object' && !(init.body instanceof FormData)) {
+    init.body = JSON.stringify(init.body);
+    if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  }
+  // 仅当 body 为字符串且未显式指定 Content-Type 时补 JSON 头
   if (typeof init.body === 'string' && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
   const res = await fetch(BASE + path, { ...init, headers });
-  if (res.status === 401 && !path.includes('/auth/login')) {
+  // 401 处理：仅在非登录页且非公开端点时重定向
+  if (res.status === 401 && !path.includes('/auth/login') && !path.includes('/auth/register') && !path.includes('/settings')) {
     localStorage.removeItem('nebula_token');
-    window.location.href = '/login';
+    // 避免在 /login 页面重复重定向
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login';
+    }
     throw new Error('未登录');
   }
   const data = await res.json().catch(() => ({}));

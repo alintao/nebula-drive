@@ -11,6 +11,44 @@ const username = ref('');
 const password = ref('');
 const loading = ref(false);
 
+/* ---------- 注册相关 ---------- */
+const showRegister = ref(false);
+const regUsername = ref('');
+const regPassword = ref('');
+const regDisplayName = ref('');
+const regLoading = ref(false);
+
+async function doRegister() {
+  if (!regUsername.value || !regPassword.value) {
+    ElMessage.warning('请输入用户名和密码');
+    return;
+  }
+  if (regPassword.value.length < 8) {
+    ElMessage.warning('密码至少 8 位');
+    return;
+  }
+  regLoading.value = true;
+  try {
+    const r = await api('/auth/register', {
+      method: 'POST',
+      body: {
+        username: regUsername.value.trim(),
+        password: regPassword.value,
+        displayName: regDisplayName.value.trim() || undefined,
+      },
+    });
+    ElMessage.success('注册成功，正在登录...');
+    // 自动登录
+    auth.token = r.token;
+    auth.user = r.user;
+    router.push('/');
+  } catch (e: any) {
+    ElMessage.error(e.message || '注册失败');
+  } finally {
+    regLoading.value = false;
+  }
+}
+
 /* ---------- 公开设置（品牌展示） ---------- */
 const brand = ref({
   appName: 'NebulaDrive 星云网盘',
@@ -32,7 +70,8 @@ async function loadBrand() {
     brand.value.copyright = s.copyright || '';
     brand.value.contactEmail = s.contactEmail || '';
     brand.value.registerEnabled = s.registerEnabled !== false;
-  } catch {
+  } catch (e) {
+    console.error('加载品牌设置失败:', e);
     /* 使用默认品牌 */
   }
 }
@@ -65,7 +104,8 @@ async function doLogin() {
         <div class="brand-name">{{ brand.appName }}</div>
         <div class="brand-sub">{{ brand.aboutText || '多存储统一管理平台' }}</div>
       </div>
-      <el-form label-position="top" @submit.prevent="doLogin">
+      <!-- 登录表单 -->
+      <el-form v-if="!showRegister" label-position="top" @submit.prevent="doLogin">
         <el-form-item label="用户名">
           <el-input v-model="username" placeholder="请输入用户名" prefix-icon="User" clearable />
         </el-form-item>
@@ -82,6 +122,37 @@ async function doLogin() {
         <el-button type="primary" class="login-btn" :loading="loading" @click="doLogin">
           登 录
         </el-button>
+        <div v-if="brand.registerEnabled" class="register-link">
+          <span>还没有账号？</span>
+          <a href="javascript:;" @click="showRegister = true">立即注册</a>
+        </div>
+      </el-form>
+
+      <!-- 注册表单 -->
+      <el-form v-else label-position="top" @submit.prevent="doRegister">
+        <el-form-item label="用户名">
+          <el-input v-model="regUsername" placeholder="3-32 位用户名" prefix-icon="User" clearable />
+        </el-form-item>
+        <el-form-item label="显示名称（可选）">
+          <el-input v-model="regDisplayName" placeholder="显示在个人资料中" clearable />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input
+            v-model="regPassword"
+            type="password"
+            placeholder="至少 8 位密码"
+            prefix-icon="Lock"
+            show-password
+            @keyup.enter="doRegister"
+          />
+        </el-form-item>
+        <el-button type="primary" class="login-btn" :loading="regLoading" @click="doRegister">
+          注 册
+        </el-button>
+        <div class="register-link">
+          <span>已有账号？</span>
+          <a href="javascript:;" @click="showRegister = false">返回登录</a>
+        </div>
       </el-form>
       <div v-if="brand.notice" class="notice">
         <el-icon><Document /></el-icon>
@@ -163,6 +234,20 @@ async function doLogin() {
 }
 .login-btn {
   width: 100%;
+}
+.register-link {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.register-link a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.register-link a:hover {
+  text-decoration: underline;
 }
 .notice {
   margin-top: 16px;
