@@ -126,37 +126,76 @@ export async function updateRoutes(app: FastifyInstance) {
       fs.mkdirSync(extractDir, { recursive: true });
       
       // 使用 PowerShell 解压（Windows）
+      let extractError = '';
       try {
         execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force"`, { timeout: 60000 });
-      } catch {
+      } catch (e: any) {
+        extractError = e.message;
         // 尝试 tar（Linux/Mac）
-        execSync(`tar -xf "${zipPath}" -C "${extractDir}"`, { timeout: 60000 });
-      }
-      
-      // 4. 复制 dist 目录到目标位置
-      const distDir = path.join(extractDir, 'dist');
-      if (!fs.existsSync(distDir)) {
-        return fail(reply, 500, '版本包格式错误：缺少 dist 目录');
-      }
-      
-      // 替换 server dist
-      const serverDist = path.join(process.cwd(), 'apps', 'server', 'dist');
-      if (fs.existsSync(serverDist)) {
-        fs.rmSync(serverDist, { recursive: true, force: true });
-      }
-      fs.cpSync(distDir, serverDist, { recursive: true });
-      
-      // 替换 web dist
-      const webDist = path.join(process.cwd(), 'apps', 'web', 'dist');
-      const webDistInPkg = path.join(extractDir, 'apps', 'web', 'dist');
-      if (fs.existsSync(webDistInPkg)) {
-        if (fs.existsSync(webDist)) {
-          fs.rmSync(webDist, { recursive: true, force: true });
+        try {
+          execSync(`tar -xf "${zipPath}" -C "${extractDir}"`, { timeout: 60000 });
+        } catch (e2: any) {
+          extractError += ' | ' + e2.message;
         }
-        fs.cpSync(webDistInPkg, webDist, { recursive: true });
       }
       
-      // 5. 清理临时文件
+      // 调试：列出解压后的内容
+      const extractedFiles = fs.existsSync(extractDir) ? fs.readdirSync(extractDir) : [];
+      const logMsg = `[UPDATE] Extract dir: ${extractDir}\n[UPDATE] Extracted files: ${extractedFiles}\n[UPDATE] Extract error: ${extractError || 'none'}\n[UPDATE] cwd: ${process.cwd()}`;
+      fs.writeFileSync(path.join(process.cwd(), 'update_debug.log'), logMsg);
+      console.log(logMsg);
+      
+      // 4. 查找版本包目录（支持新格式 server/+web/ 或旧格式 dist/）
+      const serverPkgDir = path.join(extractDir, 'server');
+      const webPkgDir = path.join(extractDir, 'web');
+      const distPkgDir = path.join(extractDir, 'dist');
+      
+      // 新格式：有 server/ 和 web/ 目录
+      if (fs.existsSync(serverPkgDir) && fs.existsSync(webPkgDir)) {
+        // 替换 server dist
+        const serverDist = path.join(process.cwd(), 'dist');
+        if (fs.existsSync(serverDist)) fs.rmSync(serverDist, { recursive: true, force: true });
+        fs.cpSync(serverPkgDir, serverDist, { recursive: true });
+        
+        // 替换 web dist
+        const webDist = path.join(process.cwd(), '..', 'web', 'dist');
+        if (fs.existsSync(webDist)) fs.rmSync(webDist, { recursive: true, force: true });
+        fs.cpSync(webPkgDir, webDist, { recursive: true });
+      } else if (fs.existsSync(distPkgDir)) {
+        // 旧格式：单个 dist/ 目录
+        const serverDist = path.join(process.cwd(), 'dist');
+        if (fs.existsSync(serverDist)) fs.rmSync(serverDist, { recursive: true, force: true });
+        fs.cpSync(distPkgDir, serverDist, { recursive: true });
+        
+        const webDist = path.join(process.cwd(), '..', 'web', 'dist');
+        const webAssets = path.join(distPkgDir, 'assets');
+        if (fs.existsSync(webAssets)) {
+          if (fs.existsSync(webDist)) fs.rmSync(webDist, { recursive: true, force: true });
+          fs.cpSync(webAssets, webDist, { recursive: true });
+        }
+      } else {
+        return fail(reply, 500, `版本包格式错误：未找到 server/、web/ 或 dist/ 目录。已解压内容: ${extractedFiles.join(', ')}`);
+      }
+      
+      // 5. 更新版本号（从 latest tag 获取）
+      const newVersion = latest.tag_name?.replace(/^v/, '') || latest.version || '';
+      if (newVersion) {
+        const pkgPath = path.join(process.cwd(), 'package.json');
+        if (fs.existsSync(pkgPath)) {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+          pkg.version = newVersion;
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+        }
+        // 也更新 server 的 package.json
+        const serverPkgPath = path.join(process.cwd(), 'apps', 'server', 'package.json');
+        if (fs.existsSync(serverPkgPath)) {
+          const spkg = JSON.parse(fs.readFileSync(serverPkgPath, 'utf-8'));
+          spkg.version = newVersion;
+          fs.writeFileSync(serverPkgPath, JSON.stringify(spkg, null, 2));
+        }
+      }
+      
+      // 6. 清理临时文件
       fs.rmSync(tmpDir, { recursive: true, force: true });
       
       // 6. 延迟重启服务器
