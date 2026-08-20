@@ -238,7 +238,94 @@ const previewUrl = ref('');
 const previewLoading = ref(false);
 const previewName = ref('');
 const previewSize = ref(0);
-const previewKind = ref<'image' | 'video' | 'audio'>('image');
+const previewKind = ref<'image' | 'video' | 'audio' | 'pdf' | 'code'>('image');
+/* ---------- 图片增强功能（对标百度网盘/夸克/Google Drive） ---------- */
+const imgScale = ref(1);          // 缩放比例 (0.1 ~ 5.0)
+const imgRotation = ref(0);       // 旋转角度 (0/90/180/270)
+const imgFit = ref<'original' | 'fit-width' | 'fit-height' | 'fullscreen'>('fit-width');
+const isFullscreen = ref(false);
+const imgInfo = ref<{ width: number; height: number; type: string } | null>(null);
+const imgLoading = ref(false);
+
+const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 5];
+const ZOOM_STEP_MULT = 1.25;      // 每次缩放倍数
+
+function zoomIn() {
+  if (imgScale.value < 5) imgScale.value = Math.min(5, imgScale.value * ZOOM_STEP_MULT);
+}
+function zoomOut() {
+  if (imgScale.value > 0.1) imgScale.value = Math.max(0.1, imgScale.value / ZOOM_STEP_MULT);
+}
+function resetZoom() {
+  imgScale.value = 1;
+  imgRotation.value = 0;
+  imgFit.value = 'fit-width';
+}
+function rotateLeft() {
+  imgRotation.value = (imgRotation.value + 270) % 360;
+}
+function rotateRight() {
+  imgRotation.value = (imgRotation.value + 90) % 360;
+}
+function setFit(mode: 'original' | 'fit-width' | 'fit-height' | 'fullscreen') {
+  imgFit.value = mode;
+  if (mode === 'fullscreen') {
+    isFullscreen.value = true;
+  } else {
+    isFullscreen.value = false;
+  }
+  imgScale.value = 1;
+}
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value;
+}
+
+// 鼠标滚轮缩放
+function onWheel(e: WheelEvent) {
+  if (previewKind.value !== 'image') return;
+  e.preventDefault();
+  if (e.deltaY < 0) zoomIn();
+  else zoomOut();
+}
+
+// 键盘快捷键
+function onImageKey(e: KeyboardEvent) {
+  if (previewKind.value !== 'image') return;
+  switch (e.key) {
+    case '+': case '=': zoomIn(); break;
+    case '-': zoomOut(); break;
+    case '0': resetZoom(); break;
+    case 'r': case 'R': rotateRight(); break;
+    case 'f': case 'F': toggleFullscreen(); break;
+    case '1': setFit('original'); break;
+    case '2': setFit('fit-width'); break;
+    case '3': setFit('fit-height'); break;
+    case '4': setFit('fullscreen'); break;
+  }
+}
+
+// 加载图片信息
+async function loadImgInfo(url: string) {
+  imgLoading.value = true;
+  imgInfo.value = null;
+  try {
+    const img = new Image();
+    img.src = url;
+    await new Promise((resolve) => {
+      img.onload = resolve;
+      img.onerror = resolve;
+    });
+    imgInfo.value = {
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+      type: url.split('.').pop()?.toUpperCase() || 'UNKNOWN',
+    };
+  } catch {
+    imgInfo.value = null;
+  } finally {
+    imgLoading.value = false;
+  }
+}
 
 function extOf(name: string) {
   return name.split('.').pop()?.toLowerCase() || '';
@@ -302,6 +389,12 @@ async function openPreview(row: any) {
   previewLoading.value = true;
   previewUrl.value = '';
   previewCode.value = '';
+  // 重置图片状态
+  imgScale.value = 1;
+  imgRotation.value = 0;
+  imgFit.value = 'fit-width';
+  isFullscreen.value = false;
+  imgInfo.value = null;
   try {
     const token = localStorage.getItem('nebula_token') || '';
     const base = `/api/v1/files/preview?storageId=${storageId.value}&path=${encodeURIComponent(row.path)}`;
@@ -317,6 +410,10 @@ async function openPreview(row: any) {
       } else {
         const blob = await res.blob();
         previewUrl.value = URL.createObjectURL(blob);
+        // 加载图片信息
+        if (previewKind.value === 'image') {
+          loadImgInfo(previewUrl.value);
+        }
       }
     } else {
       // 视频 / 音频：用 ?token= 直连流地址，支持 Range 拖动
@@ -340,6 +437,16 @@ function closePreview() {
     URL.revokeObjectURL(previewUrl.value);
   }
   previewUrl.value = '';
+}
+
+/** 在新窗口打开图片 */
+function openInNewTab() {
+  if (previewKind.value !== 'image' || !previewUrl.value) return;
+  // 创建新的 blob URL（因为原来的会被 revoke）
+  const token = localStorage.getItem('nebula_token') || '';
+  const base = `/api/v1/files/preview?storageId=${storageId.value}&path=${encodeURIComponent(previewName.value)}`;
+  const url = `${base}&token=${encodeURIComponent(token)}`;
+  window.open(url, '_blank');
 }
 
 /* ---------- 上传 ---------- */
@@ -918,28 +1025,87 @@ onMounted(async () => {
       </div>
     </el-drawer>
 
-    <!-- 图片 / 视频 / 音频 / PDF 预览 -->
+    <!-- 图片 / 视频 / 音频 / PDF / 代码 预览（增强版） -->
     <el-dialog
       v-model="previewDialog"
       :title="previewName"
-      :width="previewKind === 'image' ? '720px' : '880px'"
+      :width="previewKind === 'image' ? (isFullscreen ? '100%' : '90%') : '880px'"
+      :top="isFullscreen ? '0' : '3vh'"
+      :fullscreen="isFullscreen"
       class="preview-dialog"
       @close="closePreview"
     >
       <div class="preview-wrap" v-loading="previewLoading">
-        <!-- 图片画廊 -->
-        <div v-if="previewKind === 'image' && previewUrl" class="gallery-wrap">
-          <button v-if="galleryImages.length > 1" class="gallery-nav gallery-prev" @click="galleryPrev">
-            <el-icon><ArrowLeft /></el-icon>
-          </button>
-          <img :src="previewUrl" class="preview-img" :alt="previewName" />
-          <button v-if="galleryImages.length > 1" class="gallery-nav gallery-next" @click="galleryNext">
-            <el-icon><ArrowRight /></el-icon>
-          </button>
-        </div>
-        <div v-if="previewKind === 'image' && galleryImages.length > 1" class="gallery-counter">
-          {{ galleryIndex + 1 }} / {{ galleryImages.length }}
-        </div>
+        <!-- 图片预览（增强版：缩放/旋转/适应/全屏/信息） -->
+        <template v-if="previewKind === 'image' && previewUrl">
+          <div class="image-preview-container" @wheel.prevent="onWheel">
+            <img
+              :src="previewUrl"
+              class="preview-img-enhanced"
+              :style="{
+                transform: `scale(${imgScale}) rotate(${imgRotation}deg)`,
+                objectFit: imgFit === 'original' ? 'none' : imgFit === 'fit-width' ? 'contain' : imgFit === 'fit-height' ? 'cover' : 'contain',
+              }"
+              :alt="previewName"
+            />
+          </div>
+          <!-- 画廊导航 -->
+          <div class="gallery-controls" v-if="galleryImages.length > 1">
+            <button class="gallery-nav gallery-prev" @click="galleryPrev">
+              <el-icon><ArrowLeft /></el-icon>
+            </button>
+            <span class="gallery-counter">{{ galleryIndex + 1 }} / {{ galleryImages.length }}</span>
+            <button class="gallery-nav gallery-next" @click="galleryNext">
+              <el-icon><ArrowRight /></el-icon>
+            </button>
+          </div>
+          <!-- 图片工具栏 -->
+          <div class="image-toolbar">
+            <div class="toolbar-section">
+              <el-button-group size="small">
+                <el-button @click="zoomOut" title="缩小 (−)">
+                  <el-icon><ZoomOut /></el-icon>
+                </el-button>
+                <el-button @click="resetZoom" title="重置 (0)">
+                  <el-icon><Refresh /></el-icon>
+                </el-button>
+                <el-button @click="zoomIn" title="放大 (+)">
+                  <el-icon><ZoomIn /></el-icon>
+                </el-button>
+              </el-button-group>
+              <span class="zoom-label">{{ Math.round(imgScale * 100) }}%</span>
+            </div>
+            <div class="toolbar-section">
+              <el-button-group size="small">
+                <el-button @click="rotateLeft" title="左转">
+                  <el-icon><RefreshLeft /></el-icon>
+                </el-button>
+                <el-button @click="rotateRight" title="右转">
+                  <el-icon><RefreshRight /></el-icon>
+                </el-button>
+              </el-button-group>
+            </div>
+            <div class="toolbar-section">
+              <el-radio-group v-model="imgFit" size="small">
+                <el-radio-button value="original">原始</el-radio-button>
+                <el-radio-button value="fit-width">适应宽</el-radio-button>
+                <el-radio-button value="fit-height">适应高</el-radio-button>
+                <el-radio-button value="fullscreen">全屏</el-radio-button>
+              </el-radio-group>
+            </div>
+            <div class="toolbar-section">
+              <el-button size="small" @click="toggleFullscreen" :type="isFullscreen ? 'primary' : 'default'">
+                <el-icon><FullScreen /></el-icon>&nbsp;{{ isFullscreen ? '退出全屏' : '全屏' }}
+              </el-button>
+            </div>
+          </div>
+          <!-- 图片信息 -->
+          <div class="image-info" v-if="imgInfo">
+            <span class="info-badge">{{ imgInfo.width }} × {{ imgInfo.height }} px</span>
+            <span class="info-badge">{{ imgInfo.type }}</span>
+            <span v-if="previewSize" class="info-badge">{{ fmtSize(previewSize) }}</span>
+          </div>
+        </template>
         <!-- PDF 预览 -->
         <iframe
           v-else-if="previewKind === 'pdf' && previewUrl"
@@ -952,6 +1118,7 @@ onMounted(async () => {
         <pre v-else-if="previewKind === 'code' && previewUrl" class="preview-code">
           <code>{{ previewCode }}</code>
         </pre>
+        <!-- 视频预览 -->
         <video
           v-else-if="previewKind === 'video' && previewUrl"
           :src="previewUrl"
@@ -959,15 +1126,18 @@ onMounted(async () => {
           controls
           preload="auto"
         ></video>
+        <!-- 音频预览 -->
         <div v-else-if="previewKind === 'audio' && previewUrl" class="audio-box">
           <el-icon class="audio-icon"><Headset /></el-icon>
           <audio :src="previewUrl" class="preview-media" controls></audio>
         </div>
-        <div v-if="!previewLoading && previewUrl" class="preview-meta">
-          <span>{{ previewName }}</span>
-          <span v-if="previewSize">{{ fmtSize(previewSize) }}</span>
-          <el-button v-if="previewKind === 'pdf'" size="small" type="primary" @click="download(propsTarget || { path: previewName })">
-            <el-icon><Download /></el-icon>&nbsp;下载 PDF
+        <!-- 底部操作栏 -->
+        <div v-if="!previewLoading && previewUrl" class="preview-actions">
+          <el-button size="small" type="primary" @click="download(propsTarget || { path: previewName })">
+            <el-icon><Download /></el-icon>&nbsp;下载
+          </el-button>
+          <el-button size="small" v-if="previewKind === 'image'" @click="openInNewTab">
+            <el-icon><Top /></el-icon>&nbsp;新窗口打开
           </el-button>
         </div>
       </div>
@@ -1117,6 +1287,91 @@ onMounted(async () => {
   gap: 16px;
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+/* 图片预览增强 */
+.image-preview-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: 65vh;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 12px;
+  cursor: crosshair;
+}
+.preview-img-enhanced {
+  transition: transform 0.2s ease;
+  border-radius: 4px;
+  box-shadow: var(--shadow-hover);
+  user-select: none;
+}
+.gallery-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+}
+.gallery-counter {
+  font-size: 14px;
+  color: var(--text-secondary);
+  min-width: 60px;
+  text-align: center;
+}
+.gallery-nav {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: all 0.2s;
+}
+.gallery-nav:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.image-toolbar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+}
+.toolbar-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.zoom-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-width: 48px;
+  text-align: center;
+}
+.image-info {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.info-badge {
+  padding: 4px 10px;
+  background: var(--accent-soft);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.preview-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 8px;
 }
 
 /* 网格视图 */
