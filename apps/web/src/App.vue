@@ -78,30 +78,29 @@ async function viewUpdateDetails() {
   }
 }
 
-/** 立即更新：清除缓存并刷新页面 */
-function updateNow() {
+/** 立即更新：下载新版本包并重启服务器 */
+async function updateNow() {
   if (!updateInfo.value) return;
   ElMessageBox.confirm(
-    `即将更新到 v${updateInfo.value.latestVersion}，页面将刷新以加载最新版本。`,
+    `即将更新到 v${updateInfo.value.latestVersion}，系统将下载新版本包并自动重启。`,
     '确认更新',
     {
       confirmButtonText: '更新',
       cancelButtonText: '取消',
       type: 'info',
     }
-  ).then(() => {
-    // 显示更新中提示
-    ElMessage.info('正在更新，请稍候...');
-    // 清除缓存（如果 Service Worker 存在）
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then((regs) => {
-        regs.forEach((reg) => reg.unregister());
-      });
+  ).then(async () => {
+    try {
+      ElMessage.info('正在下载新版本包，请稍候...');
+      const r = await api('/system/perform-update', { method: 'POST' });
+      ElMessage.success(r.message || '更新成功，服务器即将重启');
+      // 等待服务器重启后刷新页面
+      setTimeout(() => {
+        window.location.reload();
+      }, 3000);
+    } catch (e: any) {
+      ElMessage.error(e.message || '更新失败');
     }
-    // 延迟 1 秒后刷新，让用户看到提示
-    setTimeout(() => {
-      window.location.reload();
-    }, 1000);
   }).catch(() => {
     // 用户取消
   });
