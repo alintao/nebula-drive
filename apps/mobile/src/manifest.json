@@ -1,0 +1,26 @@
+{
+  "name": "NebulaDrive",
+  "appid": "",
+  "description": "星云网盘移动端",
+  "version": {
+    "name": "0.1.0",
+    "code": "100"
+  },
+  "app-plus": {
+    "title": "NebulaDrive 星云网盘",
+    "usingComponents": true,
+    "background": "#f5f7fa"
+  },
+  "h5": {
+    "title": "NebulaDrive 星云网盘",
+    "router": {
+      "mode": "hash"
+    }
+  },
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": false
+    }
+  }
+}

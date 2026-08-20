@@ -1,0 +1,14 @@
+node_modules/
+dist/
+out/
+*.log
+.DS_Store
+data/
+storage/
+.env
+.env.local
+*.local
+target/
+unpackage/
+src-tauri/target/
+.vite/

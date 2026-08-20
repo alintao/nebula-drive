@@ -1,0 +1,37 @@
+{
+  "productName": "NebulaDrive",
+  "version": "0.1.0",
+  "identifier": "com.nebula.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm run dev",
+    "devUrl": "http://localhost:5199",
+    "beforeBuildCommand": "pnpm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NebulaDrive 星云网盘",
+        "width": 1024,
+        "height": 720,
+        "minWidth": 820,
+        "minHeight": 560
+      }
+    ],
+    "trayIcon": {
+      "id": "main-tray",
+      "iconPath": "icons/tray.png",
+      "iconAsTemplate": false,
+      "title": "NebulaDrive"
+    },
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/app.ico"]
+  }
+}

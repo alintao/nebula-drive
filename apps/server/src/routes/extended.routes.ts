@@ -1,0 +1,218 @@
+import type { FastifyInstance } from 'fastify';
+import { requirePermission, ok, fail } from '../auth/middleware.js';
+import { versionService } from '../services/version.service.js';
+import { tagService } from '../services/tag.service.js';
+import { commentService } from '../services/comment.service.js';
+import { favoriteService } from '../services/favorite.service.js';
+import { profileService } from '../services/profile.service.js';
+import { searchHistoryService } from '../services/searchHistory.service.js';
+import { shareStatsService } from '../services/shareStats.service.js';
+import { getDb } from '../db/index.js';
+import { config } from '../config.js';
+import fs from 'node:fs';
+import path from 'node:path';
+
+export async function extendedRoutes(app: FastifyInstance) {
+  // ===== 文件版本 =====
+  app.get('/files/:path/versions', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const q = req.query as { storageId?: string };
+    const storageId = Number(q.storageId);
+    const filePath = decodeURIComponent((req.params as { path: string }).path);
+    try {
+      const versions = versionService.list(storageId, filePath);
+      return ok(reply, { versions });
+    } catch (e: any) {
+      return fail(reply, 404, e?.message || '获取版本失败');
+    }
+  });
+
+  app.post('/files/:path/versions/:version/restore', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const q = req.query as { storageId?: string };
+    const storageId = Number(q.storageId);
+    const filePath = decodeURIComponent((req.params as { path: string }).path);
+    const version = Number((req.params as { version: string }).version);
+    try {
+      versionService.restore(storageId, filePath, version);
+      return ok(reply, { ok: true });
+    } catch (e: any) {
+      return fail(reply, 400, e?.message || '恢复版本失败');
+    }
+  });
+
+  app.delete('/files/:path/versions/:version', { preHandler: requirePermission('files:delete') }, async (req, reply) => {
+    const q = req.query as { storageId?: string };
+    const storageId = Number(q.storageId);
+    const filePath = decodeURIComponent((req.params as { path: string }).path);
+    const version = Number((req.params as { version: string }).version);
+    try {
+      versionService.remove(storageId, filePath, version);
+      return ok(reply, { ok: true });
+    } catch (e: any) {
+      return fail(reply, 400, e?.message || '删除版本失败');
+    }
+  });
+
+  // ===== 文件标签 =====
+  app.get('/files/:path/tags', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const q = req.query as { storageId?: string };
+    const storageId = Number(q.storageId);
+    const filePath = decodeURIComponent((req.params as { path: string }).path);
+    const tags = tagService.list(storageId, filePath);
+    return ok(reply, { tags });
+  });
+
+  app.post('/files/:path/tags', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const q = req.query as { storageId?: string };
+    const storageId = Number(q.storageId);
+    const filePath = decodeURIComponent((req.params as { path: string }).path);
+    const b = req.body as { tag?: string };
+    if (!b.tag?.trim()) return fail(reply, 400, '标签不能为空');
+    tagService.add(storageId, filePath, b.tag);
+    return ok(reply, { tags: tagService.list(storageId, filePath) });
+  });
+
+  app.delete('/files/:path/tags/:tag', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const q = req.query as { storageId?: string };
+    const storageId = Number(q.storageId);
+    const filePath = decodeURIComponent((req.params as { path: string }).path);
+    const tag = decodeURIComponent((req.params as { tag: string }).tag);
+    tagService.remove(storageId, filePath, tag);
+    return ok(reply, { tags: tagService.list(storageId, filePath) });
+  });
+
+  app.get('/tags', { preHandler: requirePermission('files:view') }, async (_req, reply) => {
+    return ok(reply, { tags: tagService.allTags() });
+  });
+
+  // ===== 文件注释 =====
+  app.get('/files/:path/comments', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const q = req.query as { storageId?: string };
+    const storageId = Number(q.storageId);
+    const filePath = decodeURIComponent((req.params as { path: string }).path);
+    const comments = commentService.list(storageId, filePath);
+    return ok(reply, { comments });
+  });
+
+  app.post('/files/:path/comments', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const q = req.query as { storageId?: string };
+    const storageId = Number(q.storageId);
+    const filePath = decodeURIComponent((req.params as { path: string }).path);
+    const b = req.body as { content?: string };
+    if (!b.content?.trim()) return fail(reply, 400, '注释不能为空');
+    commentService.add(storageId, filePath, req.user!.sub, req.user!.username, b.content);
+    const comments = commentService.list(storageId, filePath);
+    return ok(reply, { comments });
+  });
+
+  app.delete('/files/:path/comments/:id', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    commentService.remove(id);
+    return ok(reply, { ok: true });
+  });
+
+  // ===== 文件收藏 =====
+  app.get('/favorites', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const favs = favoriteService.list(req.user!.sub);
+    return ok(reply, { favorites: favs });
+  });
+
+  app.post('/favorites', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const b = req.body as { storageId?: number; path?: string };
+    if (!b.path) return fail(reply, 400, '缺少路径');
+    favoriteService.add(req.user!.sub, b.storageId || 0, b.path);
+    return ok(reply, { ok: true });
+  });
+
+  app.delete('/favorites', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const q = req.query as { storageId?: string; path?: string };
+    favoriteService.remove(req.user!.sub, Number(q.storageId), decodeURIComponent(q.path || ''));
+    return ok(reply, { ok: true });
+  });
+
+  // ===== 用户资料 =====
+  app.get('/profile', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const profile = profileService.get(req.user!.sub);
+    return ok(reply, { profile });
+  });
+
+  app.put('/profile', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const b = req.body as { avatar?: string; email?: string; bio?: string; phone?: string };
+    try {
+      const profile = profileService.update(req.user!.sub, b);
+      return ok(reply, { profile });
+    } catch (e: any) {
+      return fail(reply, 400, e?.message || '更新资料失败');
+    }
+  });
+
+  // ===== 搜索历史 =====
+  app.get('/search-history', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const q = req.query as { limit?: string };
+    const history = searchHistoryService.list(req.user!.sub, Number(q.limit) || 20);
+    return ok(reply, { history });
+  });
+
+  app.post('/search-history', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const b = req.body as { query?: string };
+    if (b.query?.trim()) searchHistoryService.record(req.user!.sub, b.query);
+    return ok(reply, { ok: true });
+  });
+
+  app.delete('/search-history', { preHandler: requirePermission('files:view') }, async (_req, reply) => {
+    searchHistoryService.clear(req.user!.sub);
+    return ok(reply, { ok: true });
+  });
+
+  // ===== 分享统计 =====
+  app.get('/shares/:id/stats', { preHandler: requirePermission('files:share') }, async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const stats = shareStatsService.get(id);
+    return ok(reply, { stats });
+  });
+
+  // ===== 头像上传（multipart/form-data）=====
+  app.post('/avatar', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+    const userId = req.user!.sub;
+    try {
+      const fileStream = await req.file();
+      if (!fileStream) return fail(reply, 400, '缺少文件');
+      
+      const filename = fileStream.filename || 'avatar.png';
+      const ext = path.extname(filename) || '.png';
+      
+      // 读取文件内容（流式）
+      const data = await fileStream.toBuffer();
+      
+      if (data.length === 0) return fail(reply, 400, '文件为空');
+      if (data.length > 5 * 1024 * 1024) return fail(reply, 400, '头像不能超过 5MB');
+      
+      // 保存头像到 avatars 目录
+      const avatarDir = path.join(config.dataDir, 'avatars');
+      if (!fs.existsSync(avatarDir)) fs.mkdirSync(avatarDir, { recursive: true });
+      
+      const avatarPath = path.join(avatarDir, `avatar_${userId}${ext}`);
+      fs.writeFileSync(avatarPath, data);
+      
+      // 更新 profile 的 avatar 字段
+      const avatarUrl = `/api/v1/avatar/${userId}`;
+      profileService.update(userId, { avatar: avatarUrl });
+      
+      return ok(reply, { avatar: avatarUrl });
+    } catch (e: any) {
+      return fail(reply, 400, e?.message || '上传失败');
+    }
+  });
+
+  // ===== 头像下载 =====
+  app.get('/avatar/:userId', async (req, reply) => {
+    const userId = Number((req.params as { userId: string }).userId);
+    const avatarDir = path.join(config.dataDir, 'avatars');
+    const files = fs.existsSync(avatarDir) ? fs.readdirSync(avatarDir) : [];
+    const file = files.find((f) => f.startsWith(`avatar_${userId}`));
+    if (!file) return fail(reply, 404, '头像不存在');
+    const filePath = path.join(avatarDir, file);
+    const data = fs.readFileSync(filePath);
+    reply.header('Content-Type', file.endsWith('.png') ? 'image/png' : 'image/jpeg');
+    return reply.send(data);
+  });
+}
