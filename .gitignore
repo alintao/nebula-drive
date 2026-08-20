@@ -5,6 +5,8 @@ out/
 .DS_Store
 data/
 storage/
+tmp_update/
+tmp_pkg/
 .env
 .env.local
 *.local
