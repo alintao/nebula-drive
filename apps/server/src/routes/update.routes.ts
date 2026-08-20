@@ -192,21 +192,30 @@ export async function updateRoutes(app: FastifyInstance) {
         return fail(reply, 500, `版本包格式错误：未找到 server/、web/ 或 dist/ 目录。已解压内容: ${extractedFiles.join(', ')}`);
       }
       
-      // 5. 更新版本号（从 latest tag 获取）
-      const newVersion = latest.tag_name?.replace(/^v/, '') || latest.version || '';
+      // 5. 更新版本号（优先从版本包读取，否则从 latest tag 获取）
+      let newVersion = latest.tag_name?.replace(/^v/, '') || latest.version || '';
+      
+      // 尝试从版本包中的 package.json 读取版本
+      const pkgInPkg = path.join(extractDir, 'server-package.json');
+      if (fs.existsSync(pkgInPkg)) {
+        const pkgData = JSON.parse(fs.readFileSync(pkgInPkg, 'utf-8'));
+        if (pkgData.version) newVersion = pkgData.version;
+      }
+      
       if (newVersion) {
-        const pkgPath = path.join(process.cwd(), 'package.json');
-        if (fs.existsSync(pkgPath)) {
-          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-          pkg.version = newVersion;
-          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
-        }
-        // 也更新 server 的 package.json
-        const serverPkgPath = path.join(process.cwd(), 'apps', 'server', 'package.json');
+        // 更新 server 的 package.json（process.cwd() 就是 apps/server）
+        const serverPkgPath = path.join(process.cwd(), 'package.json');
         if (fs.existsSync(serverPkgPath)) {
           const spkg = JSON.parse(fs.readFileSync(serverPkgPath, 'utf-8'));
           spkg.version = newVersion;
           fs.writeFileSync(serverPkgPath, JSON.stringify(spkg, null, 2));
+        }
+        // 更新根目录的 package.json
+        const rootPkgPath = path.join(process.cwd(), '..', 'package.json');
+        if (fs.existsSync(rootPkgPath)) {
+          const rootPkg = JSON.parse(fs.readFileSync(rootPkgPath, 'utf-8'));
+          rootPkg.version = newVersion;
+          fs.writeFileSync(rootPkgPath, JSON.stringify(rootPkg, null, 2));
         }
       }
       
