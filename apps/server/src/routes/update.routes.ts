@@ -6,11 +6,12 @@ import path from 'node:path';
 // 从 package.json 读取当前版本
 function getCurrentVersion(): string {
   try {
-    // 尝试多个路径查找 package.json
+    // 使用 process.argv[1] 定位主脚本，向上查找 package.json
+    const scriptDir = path.dirname(process.argv[1] || '');
     const candidates = [
-      path.join(__dirname, '..', '..', 'package.json'),
-      path.join(__dirname, '..', 'package.json'),
-      path.join(__dirname, 'package.json'),
+      path.join(scriptDir, '..', 'package.json'), // dist/ -> server/
+      path.join(scriptDir, '..', '..', 'package.json'), // dist/ -> apps/
+      path.join(scriptDir, '..', '..', '..', 'package.json'), // dist/ -> root
     ];
     for (const p of candidates) {
       if (fs.existsSync(p)) {

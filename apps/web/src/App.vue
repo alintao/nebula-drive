@@ -51,16 +51,54 @@ async function viewUpdateDetails() {
     const r = await api('/system/update-log');
     const latest = r.releases?.[0];
     if (latest) {
+      // 将 Markdown 转换为简单 HTML
+      const notes = (latest.notes || '无更新说明')
+        .replace(/^### (.+)$/gm, '<h4>$1</h4>')
+        .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/^- /g, '• ')
+        .replace(/\n/g, '<br>');
+      
       ElMessageBox({
         title: `版本 v${latest.version}`,
-        message: latest.notes || '无更新说明',
+        message: `<div class="release-notes">${notes}</div>`,
         dangerouslyUseHTMLString: true,
         confirmButtonText: '关闭',
+        customClass: 'release-dialog',
       });
     }
   } catch (e: any) {
     ElMessage.error(e.message || '获取更新详情失败');
   }
+}
+
+/** 立即更新：清除缓存并刷新页面 */
+function updateNow() {
+  if (!updateInfo.value) return;
+  ElMessageBox.confirm(
+    `即将更新到 v${updateInfo.value.latestVersion}，页面将刷新以加载最新版本。`,
+    '确认更新',
+    {
+      confirmButtonText: '更新',
+      cancelButtonText: '取消',
+      type: 'info',
+    }
+  ).then(() => {
+    // 显示更新中提示
+    ElMessage.info('正在更新，请稍候...');
+    // 清除缓存（如果 Service Worker 存在）
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((reg) => reg.unregister());
+      });
+    }
+    // 延迟 1 秒后刷新，让用户看到提示
+    setTimeout(() => {
+      window.location.reload();
+    }, 1000);
+  }).catch(() => {
+    // 用户取消
+  });
 }
 
 const bare = computed(() => !route.meta?.auth);
@@ -288,15 +326,19 @@ function applyBackground(s?: any) {
         </header>
 
         <!-- 更新提示横幅 -->
-        <div v-if="showUpdateBanner && updateInfo" class="update-banner glass">
-          <el-icon :size="18" class="update-icon"><Bell /></el-icon>
+        <div v-if="showUpdateBanner && updateInfo" class="update-banner">
+          <el-icon :size="22" class="update-icon"><Bell /></el-icon>
           <div class="update-info">
-            <span class="update-title">发现新版本 v{{ updateInfo.latestVersion }}</span>
-            <span class="update-sub">当前版本 v{{ updateInfo.currentVersion }}</span>
+            <div class="update-title">
+              发现新版本
+              <span class="update-badge">v{{ updateInfo.latestVersion }}</span>
+            </div>
+            <span class="update-sub">当前版本 v{{ updateInfo.currentVersion }} · 点击"立即更新"刷新加载</span>
           </div>
           <div class="update-actions">
-            <el-button size="small" @click="viewUpdateDetails">查看详情</el-button>
-            <el-button size="small" type="primary" @click="dismissUpdate">忽略</el-button>
+            <el-button size="small" link @click="viewUpdateDetails">查看详情</el-button>
+            <el-button size="small" type="primary" @click="updateNow">立即更新</el-button>
+            <el-button size="small" link @click="dismissUpdate">忽略</el-button>
           </div>
         </div>
 
@@ -594,16 +636,17 @@ function applyBackground(s?: any) {
   padding: 4px;
 }
 
-/* 更新提示横幅 */
+/* 更新提示横幅 - 与周围玻璃风格一致 */
 .update-banner {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 20px;
+  gap: 14px;
+  padding: 14px 20px;
   border-radius: 14px;
   margin-bottom: 14px;
-  background: linear-gradient(135deg, var(--accent-soft), transparent);
+  background: var(--glass-bg);
   border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur, 12px));
 }
 .update-icon {
   color: var(--accent);
@@ -613,12 +656,23 @@ function applyBackground(s?: any) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 .update-title {
   font-size: 14px;
   font-weight: 500;
   color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.update-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .update-sub {
   font-size: 12px;
@@ -628,5 +682,30 @@ function applyBackground(s?: any) {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* 更新详情弹窗样式 */
+:global(.release-dialog) {
+  --el-message-box-width: 560px;
+}
+:global(.release-notes) {
+  line-height: 1.7;
+  font-size: 14px;
+  color: var(--text);
+}
+:global(.release-notes h3) {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+  color: var(--text);
+}
+:global(.release-notes h4) {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 12px 0 6px;
+  color: var(--text);
+}
+:global(.release-notes strong) {
+  color: var(--accent);
 }
 </style>
